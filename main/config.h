@@ -3,7 +3,7 @@
 #define C3_CONFIG_H
 
 #define C3_NAME            "c3shell"
-#define C3_VERSION         "0.2"
+#define C3_VERSION         "0.3"
 
 /* Setup network hosted while the device has no WiFi to join.
  * SSID is this prefix + the last two MAC bytes, e.g. "c3shell-2D90".
