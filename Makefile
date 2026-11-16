@@ -12,6 +12,7 @@ WOLFSSL := third_party/wolfssl
 WOLFSSH := third_party/wolfssh
 B       := build-sim
 PIO     ?= $(HOME)/esp/pio-venv/bin/pio
+ESPTOOL ?= $(HOME)/.platformio/packages/tool-esptool/esptool
 
 CFLAGS  ?= -O1 -g
 CFLAGS  += -std=gnu11 -Wall -Wextra -pthread -DWOLFSSL_USER_SETTINGS \
@@ -70,7 +71,7 @@ firmware:
 flash:
 	$(PIO) run -t upload
 	@# this board stays in the ROM downloader after a flash; kick it into the firmware
-	$(dir $(PIO))esptool --port /dev/ttyACM0 --after watchdog-reset chip-id
+	$(ESPTOOL) --port /dev/ttyACM0 --after watchdog-reset chip-id
 monitor:
 	$(PIO) device monitor
 
