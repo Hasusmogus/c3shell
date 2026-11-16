@@ -54,6 +54,11 @@ int tn_getc(session_t *s, int timeout_ms)
     return s->ibuf[s->ipos++];
 }
 
+bool tn_input_ready(session_t *s)
+{
+    return s->ipos < s->ilen || poll_input(s) > 0;
+}
+
 int tn_read_avail(session_t *s, uint8_t *buf, int cap)
 {
     if (s->ipos >= s->ilen && poll_input(s) == TN_CLOSED)

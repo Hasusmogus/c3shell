@@ -26,6 +26,11 @@
 #define C3_AP_LINGER_MS    3000       /* after a successful join, before the setup network vanishes */
 
 #define C3_KNOWN_HOSTS     16
+
+#define C3_PATH_MAX        128        /* longest path in the file area, e.g. "/notes/todo.txt" */
+#define C3_NAME_MAX        64         /* longest single name + 1 (LittleFS limit) */
+#define C3_HOST_MAX        (C3_PATH_MAX + 64) /* the same path with the file area's mount point in front */
+#define C3_VI_MAX          (32 * 1024) /* largest file vi will load */
 #define C3_SSH_CONNECT_MS  8000
 #define C3_SSH_IO_MS       20000
 

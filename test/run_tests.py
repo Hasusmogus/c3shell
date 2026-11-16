@@ -99,7 +99,15 @@ class Client:
         return out
 
     def send(self, s):
-        os.write(self.fd, s.encode() if isinstance(s, str) else s)
+        data = s.encode() if isinstance(s, str) else s
+        while data:                        # a pty takes only so much at once
+            try:
+                n = os.write(self.fd, data)
+            except BlockingIOError:
+                n = 0
+            data = data[n:]
+            if data:
+                self._pump(0.05)           # keep draining output so ssh never stalls
 
     def line(self, s):
         self.send(s + "\r")
@@ -161,7 +169,11 @@ def login(sim, user="admin", password="secret-123", **kw):
     return t
 
 
-PROMPT = r"admin@c3shell-51M0> "
+PROMPT = r"admin@c3shell-51M0:/\S*> "
+
+
+def prompt_in(d):
+    return re.escape(f"admin@c3shell-51M0:{d}> ")
 results = []
 
 
@@ -541,6 +553,192 @@ def t_ssh_other_hostkeys(c):
         proc.terminate()
 
 
+@step("files: mkdir, cd, touch, ls, cp, mv, cat, rm, rmdir, quoting, df")
+def t_files(c):
+    t = c["t"]
+
+    def run(cmd, where="/"):
+        t.line(cmd)
+        return t.expect(prompt_in(where))
+
+    out = run("ls")
+    assert out.strip().endswith(">") and "\n" in out          # empty root lists nothing
+    run("mkdir docs")
+    run("mkdir -p docs/deep/er")
+    out = run("mkdir docs")
+    assert "File exists" in out, out
+    run("cd docs/deep", "/docs/deep")
+    out = run("pwd", "/docs/deep")
+    assert "\n/docs/deep\r\n" in out, out
+    run("touch a.txt 'two words.txt'", "/docs/deep")
+    out = run("ls -l", "/docs/deep")
+    assert "a.txt" in out and "two words.txt" in out and "er/" in out, out
+    run("cd ..", "/docs")
+    run("cd ../../../..")                   # can't climb above the root
+    out = run("ls docs")
+    assert "deep/" in out, out
+    out = run("cd nowhere")
+    assert "No such file or directory" in out, out
+    out = run("cd docs/deep/a.txt")
+    assert "Not a directory" in out, out
+    out = run("rmdir docs")
+    assert "not empty" in out, out
+    out = run("rm docs")
+    assert "is a directory" in out, out
+
+    # contents come in through vi; cp/mv/cat work on them
+    t.line("vi docs/hello.txt")
+    t.expect(r"\[New File\]")
+    t.send("iline one\rline two\x1b")
+    time.sleep(0.2)
+    t.send(":wq\r")
+    t.expect(prompt_in("/"))
+    out = run("cat docs/hello.txt")
+    assert "line one\r\nline two\r\n" in out, repr(out)
+    run("cp docs/hello.txt docs/deep")
+    run("mv docs/deep/hello.txt /docs/deep/renamed.txt")
+    out = run("cat docs/deep/renamed.txt")
+    assert "line two" in out, out
+    out = run("ls -l docs/deep")
+    assert "renamed.txt" in out and "hello.txt" not in out and re.search(r"-\s+18\s+renamed\.txt", out), out
+    out = run("mv docs docs/deep")
+    assert "into itself" in out, out
+    out = run("cat 'docs/deep/two words.txt'")
+    out = run("rm /")
+    assert "refusing" in out, out
+    out = run('echo "unclosed')
+    assert "missing closing quote" in out, out
+    out = run("df")
+    assert re.search(r"\d+ KB used of 1984 KB", out), out
+    run("cd docs/deep", "/docs/deep")
+    out = run("rm -r /docs", "/docs/deep")
+    assert "you are inside it" in out, out
+    run("cd /")
+    run("rm -r docs")
+    out = run("ls")
+    assert "docs" not in out, out
+
+
+@step("files: no way out of the file area")
+def t_sandbox(c):
+    t, sim = c["t"], c["sim"]
+    state = os.path.dirname(sim.known_hosts) + "/state"
+    assert os.path.exists(f"{state}/account.bin"), os.listdir(state)
+    for probe in ["../account.bin", "/../account.bin", "../../state/account.bin", "..//../account.bin",
+                  "./../../../../etc/passwd"]:
+        t.line(f"cat {probe}")
+        out = t.expect(PROMPT)
+        assert "No such file" in out, (probe, out)
+    t.line("ls ..")
+    out = t.expect(PROMPT)
+    assert "account" not in out and "fs" not in out.split("\n", 1)[1], out
+    t.line("vi ../escape.txt")
+    t.expect(r"\[New File\]")
+    t.send("ix\x1b")
+    time.sleep(0.2)
+    t.send(":wq\r")
+    t.expect(PROMPT)
+    assert not os.path.exists(f"{state}/escape.txt"), "a write escaped the file area"
+    assert os.path.exists(f"{state}/fs/escape.txt"), "the write should have landed at /escape.txt"
+    t.line("rm escape.txt")
+    t.expect(PROMPT)
+    t.line("ls " + "x" * 70)
+    out = t.expect(PROMPT)
+    assert "too long" in out, out
+
+
+@step("vi: editing commands, undo, search, yank/put, quit protection")
+def t_vi(c):
+    t, sim = c["t"], c["sim"]
+    path = os.path.dirname(sim.known_hosts) + "/state/fs/edit.txt"
+    with open(path, "w") as f:
+        f.write("alpha beta\ngamma\ndelta\n\tindented\nüñí ok\n")
+
+    def keys(k):
+        t.send(k)
+        time.sleep(0.15)
+
+    def content():
+        with open(path) as f:
+            return f.read()
+
+    t.line("vi edit.txt")
+    t.expect(r'"/edit.txt" 5L, 4\dB')
+    keys("dd")                                 # delete "alpha beta"
+    keys("p")                                  # put it back below "gamma"
+    keys(":w\r")
+    t.expect("written")
+    assert content() == "gamma\nalpha beta\ndelta\n\tindented\nüñí ok\n", repr(content())
+    keys("u")                                  # undo the put
+    keys("gg")
+    keys("wwx")                                # w crosses onto the next line
+    keys("u")
+    keys("G$")
+    keys("x")                                  # delete the last character of "üñí ok"
+    keys("0x")                                 # delete the multi-byte ü as one character
+    keys(":w\r")
+    t.expect("written")
+    assert content().endswith("ñí o\n"), repr(content())
+    keys("/delta\r")
+    keys("Aine\x1b")                          # append at end of the found line
+    keys("ggOtop\x1b")
+    keys("3G")
+    keys("J")
+    keys(":w\r")
+    t.expect("written")
+    lines = content().split("\n")
+    assert lines[0] == "top", lines
+    assert "deltaine" in content(), repr(content())
+    keys("ggdw")
+    keys(":w\r")
+    t.expect("written")
+    keys("ihello\x1b")
+    keys(":q\r")
+    t.expect("No write since last change")
+    keys(":q!\r")
+    t.expect(PROMPT)
+    assert "hello" not in content(), repr(content())
+    t.line("vi edit.txt")
+    t.expect("edit.txt")
+    keys("yyP:x\r")                            # :x saves when changed
+    t.expect(PROMPT)
+    assert content().split("\n")[0] == content().split("\n")[1], repr(content())
+    t.line("vi edit.txt")
+    t.expect("edit.txt")
+    keys("ZZ")                                 # unchanged: just quits
+    t.expect(PROMPT)
+    t.line("vi")
+    t.expect("No Name")
+    keys("iscratch\x1b:w\r")
+    t.expect("E32: No file name")
+    keys(":w scratch.txt\r")
+    t.expect("written")
+    keys(":q\r")
+    t.expect(PROMPT)
+    t.line("cat scratch.txt")
+    t.expect("scratch")
+    t.expect(PROMPT)
+    t.line("rm scratch.txt edit.txt")
+    t.expect(PROMPT)
+
+    # a big paste streams in without a redraw per character, and size is capped
+    t.line("vi big.txt")
+    t.expect("New File")
+    t.send("i" + ("0123456789abcdef" * 4 + "\r") * 300 + "\x1b")
+    keys(":wq\r")
+    t.expect(PROMPT, timeout=60)
+    with open(path.replace("edit.txt", "big.txt")) as f:
+        got = f.read()
+    assert got == ("0123456789abcdef" * 4 + "\n") * 300 + "\n", f"paste: {len(got)} bytes, {got.count(chr(10))} lines"
+    with open(path.replace("edit.txt", "huge.txt"), "w") as f:
+        f.write("x" * 40000)
+    t.line("vi huge.txt")
+    t.expect("too large for vi")
+    t.expect(PROMPT)
+    t.line("rm big.txt huge.txt")
+    t.expect(PROMPT)
+
+
 @step("repeated wrong passwords get the address blocked for a while")
 def t_lockout(c):
     sim = c["sim"]
@@ -592,10 +790,12 @@ def t_fallback(c):
     sim.wait_log("stopped hosting", start=mark)
 
 
-@step("reboot: account and network survive, device rejoins by itself")
+@step("reboot: account, network and files survive, device rejoins by itself")
 def t_reboot(c):
     sim = c["sim"]
     t = login(sim)
+    t.line("touch keep.txt")
+    t.expect(PROMPT)
     t.line("passwd")
     t.expect("Current password: ")
     t.line("secret-123")
@@ -617,6 +817,9 @@ def t_reboot(c):
     t.expect("Permission denied, please try again")
     t.close()
     t = login(sim, password="new-secret-456")
+    t.line("ls")
+    out = t.expect(PROMPT)
+    assert "keep.txt" in out, "files must survive a reboot: " + out
     c["t"] = t
 
 
@@ -650,6 +853,8 @@ def t_reset(c):
     t = sim.connect("admin")
     t.expect("First-time setup")
     t.close()
+    state = os.path.dirname(sim.known_hosts) + "/state/fs"
+    assert os.listdir(state) == [], f"factory reset left files behind: {os.listdir(state)}"
 
 
 def main():

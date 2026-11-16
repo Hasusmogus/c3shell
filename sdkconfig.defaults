@@ -6,3 +6,9 @@ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 CONFIG_LWIP_MAX_SOCKETS=10
+# Any attempt by running code to write the bootloader, partition table or the
+# running firmware's flash is stopped by the flash driver (this is also the
+# IDF default; stated here so it can't silently change).
+CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS=y
+# LittleFS: the vi/cp code writes whole files and renames them into place.
+CONFIG_LITTLEFS_USE_MTIME=n

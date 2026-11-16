@@ -10,6 +10,8 @@ An SSH jump shell for the ESP32-C3, written in C (ESP-IDF).
 - **Hosts its own WiFi network until it has one to join.** Connect to the
   setup network, ssh in, run `wifi`, pick your network from the list. The
   setup network then disappears and the board lives on your network.
+- **Files on the device.** A small Unix-style file area with `ls`, `cd`,
+  `mkdir`, `touch`, `rm`, `cp`, `mv`, `cat` and a built-in `vi`.
 - **A virtual ESP32-C3** (`make run`) runs the same code on your PC so you can
   develop and test without flashing.
 
@@ -88,11 +90,37 @@ retrying the saved network once a minute while nobody is logged in.
     sshkey [new]              show (or regenerate) this device's public key
     hosts                     list remembered SSH host keys
     hosts forget <n|name>     forget one
+    ls [-l] [-a] [path]       list files               cd [dir]   pwd
+    mkdir [-p] dir            make a directory         rmdir dir
+    touch file                create an empty file     rm [-r] [-f] path
+    cat file   cp from to   mv from to                df (space left)
+    vi [file]                 edit a file
     status                    network, sessions, memory
     passwd                    change your password
     reboot                    restart the device
-    factory-reset             erase account, WiFi and SSH data
+    factory-reset             erase account, WiFi, SSH data and all files
     exit                      log out
+
+### Files
+
+The file area is a 1.9 MB LittleFS partition of its own (power-loss safe,
+wear levelled), shown to you as `/`. Paths work as usual: relative to the
+current directory, `..` to go up (never above `/`), quotes around names with
+spaces. Names can be up to 63 characters, paths up to 127.
+
+`vi` is a deliberately small vi: `h j k l`/arrows, `w b 0 ^ $ gg G`,
+`Ctrl-F`/`Ctrl-B`, counts (`5j`, `3dd`, `12G`), `i a I A o O` to insert,
+`x r J D dd dw d$ yy p P`, `u` (one level, pressing it again redoes),
+`/text n N`, and `:w [file] :q :q! :wq :x :<line> ZZ`. It edits files up to
+32 KB, held in RAM, and saves by writing a new copy and renaming it over the
+old one, so a crash or power cut mid-save never leaves a half-written file.
+
+The firmware cannot be changed from the shell. The file commands can only
+name things inside the file area; the firmware, the account and the SSH keys
+live in other flash partitions that no command can address. In addition the
+flash driver refuses, at run time, any write to the bootloader, the partition
+table or the running firmware. Re-flashing still works over USB, which needs
+physical access to the board.
 
 Outbound logins try the board's own Ed25519 key first (add the line printed
 by `sshkey` to `~/.ssh/authorized_keys` on a server for password-less login),
@@ -115,11 +143,13 @@ stuck outbound connection type `~.` at the start of a line; from OpenSSH type
   the account. Change `C3_AP_PASSWORD` in `main/config.h` before relying on
   it: with the default, that first visitor could be anyone in radio range.
 - The account password is stored as a salted PBKDF2-SHA256 hash; the WiFi
-  password and the board's SSH private keys are stored in flash unencrypted.
+  password, the board's SSH private keys and your files are stored in flash
+  unencrypted, so anyone holding the board can read them out over USB.
 
 ## Layout
 
     main/            portable application code + config.h (tunables)
+                     fs.c = file commands and path sandbox, vi.c = the editor
     main/esp/        ESP32-C3 backend (WiFi, NVS, app_main)
     sim/             Linux backend: the virtual device
     config/          wolfCrypt/wolfSSH build settings shared by both builds

@@ -19,6 +19,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_littlefs.h"
 #include "lwip/sockets.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -71,6 +72,40 @@ void port_kv_wipe(void)
     nvs_erase_all(h);
     nvs_commit(h);
     nvs_close(h);
+}
+
+/* ---------------- file area ---------------- */
+
+#define FS_LABEL "storage"
+#define FS_ROOT  "/files"
+
+const char *port_fs_root(void) { return FS_ROOT; }
+
+int port_fs_usage(long *total, long *used)
+{
+    size_t t = 0, u = 0;
+    if (esp_littlefs_info(FS_LABEL, &t, &u) != ESP_OK)
+        return -1;
+    *total = (long)t;
+    *used = (long)u;
+    return 0;
+}
+
+void port_fs_wipe(void)
+{
+    esp_littlefs_format(FS_LABEL);
+}
+
+static void fs_mount(void)
+{
+    esp_vfs_littlefs_conf_t conf = {
+        .base_path = FS_ROOT,
+        .partition_label = FS_LABEL,
+        .format_if_mount_failed = true,     /* first boot: the partition is blank */
+    };
+    esp_err_t e = esp_vfs_littlefs_register(&conf);
+    if (e != ESP_OK)
+        ESP_LOGE(TAG, "file area could not be mounted (%s)", esp_err_to_name(e));
 }
 
 /* ---------------- system ---------------- */
@@ -339,6 +374,7 @@ void app_main(void)
         e = nvs_flash_init();
     }
     ESP_ERROR_CHECK(e);
+    fs_mount();
     wifi_init();
     c3shell_main();
 }

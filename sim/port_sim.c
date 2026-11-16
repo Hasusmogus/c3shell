@@ -9,6 +9,7 @@
  * console() below or type "help". */
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <ftw.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -202,6 +203,48 @@ void port_kv_wipe(void)
     }
     if (d)
         closedir(d);
+}
+
+/* ---------------- file area: a plain directory ---------------- */
+
+#define SIM_FS_TOTAL (0x1F0000L)      /* same size as the chip's storage partition */
+static char fs_root[512];
+static long fs_used_acc;
+
+const char *port_fs_root(void) { return fs_root; }
+
+static int add_size(const char *p, const struct stat *st, int flag, struct FTW *f)
+{
+    (void)p;
+    (void)f;
+    if (flag == FTW_F)
+        fs_used_acc += (st->st_size + 4095) / 4096 * 4096;   /* whole 4 KB blocks, like LittleFS */
+    else
+        fs_used_acc += 4096;
+    return 0;
+}
+
+int port_fs_usage(long *total, long *used)
+{
+    fs_used_acc = 0;
+    nftw(fs_root, add_size, 16, FTW_PHYS);
+    *total = SIM_FS_TOTAL;
+    *used = fs_used_acc < SIM_FS_TOTAL ? fs_used_acc : SIM_FS_TOTAL;
+    return 0;
+}
+
+static int rm_entry(const char *p, const struct stat *st, int flag, struct FTW *f)
+{
+    (void)st;
+    (void)flag;
+    if (f->level > 0)
+        remove(p);
+    return 0;
+}
+
+void port_fs_wipe(void)
+{
+    nftw(fs_root, rm_entry, 16, FTW_DEPTH | FTW_PHYS);
 }
 
 /* ---------------- simulated radio ---------------- */
@@ -429,8 +472,11 @@ int main(int argc, char **argv)
         }
     }
     mkdir(state_dir, 0700);
+    snprintf(fs_root, sizeof fs_root, "%s/fs", state_dir);
+    mkdir(fs_root, 0700);
     if (fresh) {
         port_kv_wipe();
+        port_fs_wipe();
         for (int i = 1; i < argc; i++)          /* a simulated reboot must not wipe again */
             if (strcmp(argv[i], "--fresh") == 0)
                 argv[i] = "--kept";

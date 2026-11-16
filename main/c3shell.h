@@ -53,11 +53,13 @@ typedef struct session {
     /* shell */
     char     user[32];
     char     peer[24];
+    char     cwd[C3_PATH_MAX];   /* in the file area */
     char     hist[HIST_N][LINE_MAX_];
     int      hist_n;
 } session_t;
 
 int  tn_getc(session_t *s, int timeout_ms);
+bool tn_input_ready(session_t *s);                         /* typed bytes waiting? (non-blocking) */
 int  tn_read_avail(session_t *s, uint8_t *buf, int cap);  /* non-blocking: n, 0, or TN_CLOSED */
 int  tn_write(session_t *s, const void *data, size_t len); /* raw bytes */
 void tn_puts(session_t *s, const char *str);               /* text, \n -> \r\n */
@@ -71,6 +73,24 @@ void c3shell_main(void);               /* start everything; never returns */
 int  server_session_count(void);
 void server_kick_ap_sessions(void);
 void session_main(session_t *s);       /* shell.c */
+
+/* ---------- file area (fs.c, vi.c) ---------- */
+int  fs_resolve(session_t *s, const char *arg, char *vpath, size_t vcap);  /* 0 or -errno */
+int  fs_host(const char *vpath, char *host, size_t cap);              /* 0, or -ENAMETOOLONG */
+int  fs_read_file(const char *host, char **data, size_t *len, size_t max);
+int  fs_write_file(const char *host, const char *data, size_t len);
+int  cmd_ls(session_t *s, int argc, char **argv);
+int  cmd_cd(session_t *s, int argc, char **argv);
+int  cmd_pwd(session_t *s, int argc, char **argv);
+int  cmd_mkdir(session_t *s, int argc, char **argv);
+int  cmd_rmdir(session_t *s, int argc, char **argv);
+int  cmd_rm(session_t *s, int argc, char **argv);
+int  cmd_touch(session_t *s, int argc, char **argv);
+int  cmd_cat(session_t *s, int argc, char **argv);
+int  cmd_cp(session_t *s, int argc, char **argv);
+int  cmd_mv(session_t *s, int argc, char **argv);
+int  cmd_df(session_t *s, int argc, char **argv);
+int  cmd_vi(session_t *s, int argc, char **argv);
 
 /* ---------- account ---------- */
 bool account_exists(void);

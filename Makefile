@@ -26,7 +26,7 @@ WC  := aes asn coding curve25519 ed25519 ecc error fe_operations ge_operations h
        logging memory pwdbased random rsa sha sha256 sha512 signature sp_int wc_port \
        wc_encrypt wolfmath
 SSH := internal io log port ssh keygen ossh misc
-APP := term sshio account netmgr server shell sshstore sshc
+APP := term sshio fs vi account netmgr server shell sshstore sshc
 
 OBJS := $(APP:%=$(B)/app/%.o) $(B)/app/port_sim.o \
         $(WC:%=$(B)/wolfcrypt/%.o) $(SSH:%=$(B)/wolfssh/%.o)

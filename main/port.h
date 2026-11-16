@@ -14,6 +14,12 @@ int  port_kv_set(const char *key, const void *buf, size_t len);
 void port_kv_del(const char *key);
 void port_kv_wipe(void);
 
+/* ---- the user's file area: a directory tree reached with ordinary POSIX
+ *      calls under this prefix (its own flash partition on the chip) ---- */
+const char *port_fs_root(void);
+int  port_fs_usage(long *total, long *used);
+void port_fs_wipe(void);
+
 /* ---- system ---- */
 uint32_t port_uptime_s(void);
 void     port_sleep_ms(uint32_t ms);

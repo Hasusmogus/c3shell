@@ -84,10 +84,15 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  sshkey [new]              show (or regenerate) this device's public key\n"
             "  hosts                     list remembered SSH host keys\n"
             "  hosts forget <n|name>     forget one\n"
+            "  ls [-l] [-a] [path]       list files            cd [dir]   pwd\n"
+            "  mkdir [-p] dir            make a directory      rmdir dir\n"
+            "  touch file                create an empty file  rm [-r] [-f] path\n"
+            "  cat file   cp from to   mv from to             df (space left)\n"
+            "  vi [file]                 edit a file (:wq saves and quits, :q! discards)\n"
             "  status                    network, sessions, memory\n"
             "  passwd                    change your password\n"
             "  reboot                    restart the device\n"
-            "  factory-reset             erase account, WiFi and SSH data\n"
+            "  factory-reset             erase account, WiFi, SSH data and all files\n"
             "  exit                      log out\n");
     return CMD_OK;
 }
@@ -348,11 +353,12 @@ static int cmd_factory_reset(session_t *s, int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    if (!tn_confirm(s, "This erases the account, the saved WiFi network, known hosts and both SSH keys\n(your SSH client will warn that this device's host key changed)."))
+    if (!tn_confirm(s, "This erases the account, the saved WiFi network, known hosts, both SSH keys and\nevery file (your SSH client will warn that this device's host key changed)."))
         return CMD_OK;
     tn_puts(s, "Erasing and rebooting ...\n");
     port_log("factory reset requested by %s", s->user);
     port_sleep_ms(500);
+    port_fs_wipe();
     port_kv_wipe();
     port_reboot();
     return CMD_EXIT;
@@ -374,15 +380,59 @@ static const struct {
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
     { "status", cmd_status }, { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
+    { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },
+    { "mkdir", cmd_mkdir },   { "rmdir", cmd_rmdir },    { "rm", cmd_rm },
+    { "touch", cmd_touch },   { "cat", cmd_cat },        { "cp", cmd_cp },
+    { "mv", cmd_mv },         { "df", cmd_df },          { "vi", cmd_vi },
     { "logout", cmd_exit },   { "quit", cmd_exit },
 };
 
+/* Split a command line into words. "double" or 'single' quotes keep spaces
+ * inside one word. Splits in place. */
+static int split(char *line, char **argv, int max)
+{
+    int argc = 0;
+    char *r = line, *w = line;
+    while (*r) {
+        while (*r == ' ' || *r == '\t')
+            r++;
+        if (!*r)
+            break;
+        if (argc == max)
+            return -1;
+        argv[argc++] = w;
+        char q = 0;
+        while (*r && (q || (*r != ' ' && *r != '\t'))) {
+            if (!q && (*r == '"' || *r == '\'')) {
+                q = *r++;
+            } else if (q && *r == q) {
+                q = 0;
+                r++;
+            } else {
+                *w++ = *r++;
+            }
+        }
+        if (q)
+            return -2;
+        if (*r)
+            r++;
+        *w++ = 0;
+    }
+    return argc;
+}
+
 static int run_line(session_t *s, char *line)
 {
-    char *argv[8];
-    int argc = 0;
-    for (char *tok = strtok(line, " \t"); tok && argc < 8; tok = strtok(NULL, " \t"))
-        argv[argc++] = tok;
+    char *argv[16];
+    int argc = split(line, argv, 16);
+    if (argc == -1) {
+        tn_puts(s, "too many arguments\n");
+        return CMD_OK;
+    }
+    if (argc == -2) {
+        tn_puts(s, "missing closing quote\n");
+        return CMD_OK;
+    }
     if (argc == 0)
         return CMD_OK;
     for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
@@ -394,7 +444,7 @@ static int run_line(session_t *s, char *line)
 
 void session_main(session_t *s)
 {
-    char id[5], prompt[64], line[LINE_MAX_];
+    char id[5], prompt[C3_PATH_MAX + 64], line[LINE_MAX_];
     net_status_t st;
 
     port_device_id(id);
@@ -416,8 +466,9 @@ void session_main(session_t *s)
         tn_puts(s, "No WiFi network chosen yet - run 'wifi' to pick one.\n");
     tn_puts(s, "Type 'help' for the list of commands.\n\n");
 
-    snprintf(prompt, sizeof prompt, "%s@%s-%s> ", s->user, C3_NAME, id);
+    snprintf(s->cwd, sizeof s->cwd, "/");
     while (!s->closed) {
+        snprintf(prompt, sizeof prompt, "%s@%s-%s:%s> ", s->user, C3_NAME, id, s->cwd);
         int n = tn_readline(s, prompt, line, sizeof line, RL_ECHO | RL_HISTORY, C3_IDLE_TIMEOUT_S);
         if (n == TN_INTR)
             continue;

@@ -6,4 +6,3 @@ third_party/
 sdkconfig
 sdkconfig.esp32-c3
 managed_components/
-dependencies.lock
