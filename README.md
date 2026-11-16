@@ -1,28 +1,29 @@
 # c3shell
 
-A telnet-accessible jump shell for the ESP32-C3, written in C (ESP-IDF).
+An SSH jump shell for the ESP32-C3, written in C (ESP-IDF).
 
-- **Telnet in, SSH out.** Log in to the board with any telnet client, then
-  `ssh user@host` to open a real interactive shell on another machine
-  (full-screen programs, window resizing, Ctrl-C all work).
+- **SSH in, SSH out.** Log in to the board with any SSH client, then
+  `ssh user@host` from its shell to open a real interactive shell on another
+  machine (full-screen programs, window resizing, Ctrl-C all work).
 - **First boot asks you to create an account.** Nothing is preconfigured; the
   first person to connect picks the username and password.
 - **Hosts its own WiFi network until it has one to join.** Connect to the
-  setup network, telnet in, run `wifi`, pick your network from the list. The
+  setup network, ssh in, run `wifi`, pick your network from the list. The
   setup network then disappears and the board lives on your network.
 - **A virtual ESP32-C3** (`make run`) runs the same code on your PC so you can
   develop and test without flashing.
 
 ## Try it without hardware
 
-    make run-fresh            # a factory-new virtual device
-    telnet localhost 2323     # in another terminal
+    make run-fresh                # a factory-new virtual device
+    ssh -p 2222 you@localhost     # in another terminal
 
-You get the first-boot account prompt, then the shell. Run `wifi` and join
-`HomeNet` (password `homepass123`; the simulated networks are in
-`sim/networks.txt`). Your telnet session is closed, just as it would be when
-the real setup network vanishes; reconnect and you get a login prompt.
-`ssh you@some-machine` from there reaches real machines on your network.
+No password is asked while the device has no account: you land in the
+first-boot dialogue, then the shell. Run `wifi` and join `HomeNet` (password
+`homepass123`; the simulated networks are in `sim/networks.txt`). Your session
+is closed, just as it would be when the real setup network vanishes; reconnect
+and this time your password is required. `ssh you@some-machine` from the
+device's shell reaches real machines on your network.
 
 `make run` starts it again with its saved state (`sim/state/`), like a power
 cycle. While it runs you can type into the simulator's own terminal to play
@@ -36,17 +37,18 @@ the outside world:
 | `status`        | radio state and session count                            |
 | `reboot`        | power-cycle the virtual device                           |
 
-`make test` runs the automated end-to-end suite: a scripted telnet client
-walks through first boot, the WiFi selector, WiFi loss and recovery, reboot,
-factory reset, and SSH against both a mock server and a real OpenSSH `sshd`
-started on a spare local port. It needs `uv` (for the mock server's Python
-dependency) and the usual `telnet`/`sshd`/`ssh-keygen` programs.
+`make test` runs the automated end-to-end suite: the real OpenSSH client on a
+pseudo-terminal, scripted, walks through first boot, the WiFi selector, WiFi
+loss and recovery, the wrong-password lockout, reboot, factory reset, and
+outbound SSH against both a mock server and a real OpenSSH `sshd` started on a
+spare local port. It needs `uv` (for the mock server's Python dependency) and
+the usual `ssh`/`sshd`/`ssh-keygen` programs.
 
 ### What the simulator does and does not cover
 
-The simulator compiles everything in `main/*.c` unchanged: telnet protocol,
-line editor, shell, account store, network state machine, and the SSH client
-with the same wolfSSH/wolfCrypt sources and the same `config/user_settings.h`
+The simulator compiles everything in `main/*.c` unchanged: SSH server, line
+editor, shell, account store, network state machine, and the outbound SSH
+client, with the same wolfSSH/wolfCrypt sources and the same `config/user_settings.h`
 as the firmware. Session threads even get the firmware's stack size and report
 how much of it they used.
 
@@ -59,16 +61,18 @@ needs the board.
 ## On the board
 
     make firmware     # compile only
-    make flash        # compile, flash over /dev/ttyACM0, start
+    make flash        # compile, flash over USB, start
     make monitor      # serial log
 
 1. Power it up. It hosts a WiFi network called `c3shell-XXXX` (XXXX = last
    two bytes of its MAC), password `c3shell-setup`.
-2. Join that network and `telnet 192.168.4.1`.
+2. Join that network and `ssh you@192.168.4.1` (any username; no password yet).
+   Compare the host key fingerprint your client shows with the one on the
+   serial log (`make monitor`) if you want to be sure it is your board.
 3. Create your account at the prompt.
 4. Run `wifi`, choose your network, enter its password. The board prints the
    address it received, and the setup network shuts down a few seconds later.
-5. Rejoin your normal network and `telnet <that address>`. The board also
+5. Rejoin your normal network and `ssh you@<that address>`. The board also
    registers the DHCP hostname `c3shell-XXXX`, and prints its address on the
    serial log.
 
@@ -80,7 +84,7 @@ retrying the saved network once a minute while nobody is logged in.
 
     wifi                      pick a WiFi network to join (scan + select)
     wifi forget               forget the saved network, host the setup network
-    ssh [user@]host [-p port] open a shell on another machine  (~. hangs up)
+    ssh [user@]host [-p port] open a shell on another machine
     sshkey [new]              show (or regenerate) this device's public key
     hosts                     list remembered SSH host keys
     hosts forget <n|name>     forget one
@@ -90,22 +94,28 @@ retrying the saved network once a minute while nobody is logged in.
     factory-reset             erase account, WiFi and SSH data
     exit                      log out
 
-SSH logins try the board's own Ed25519 key first (add the line printed by
-`sshkey` to `~/.ssh/authorized_keys` on a server for password-less login),
+Outbound logins try the board's own Ed25519 key first (add the line printed
+by `sshkey` to `~/.ssh/authorized_keys` on a server for password-less login),
 then fall back to password or keyboard-interactive prompts. Host keys are
-remembered on first connection and a changed key is refused.
+remembered on first connection and a changed key is refused. To hang up a
+stuck outbound connection type `~.` at the start of a line; from OpenSSH type
+`~~.`, because your own client swallows the first `~`.
 
 ## Security notes
 
-- Telnet is not encrypted. Your c3shell password, and any SSH password you
-  type through it, cross the WiFi link protected only by the WiFi encryption.
-  Use it on networks you trust, and prefer `sshkey` logins so no server
-  password is typed at all.
-- Change `C3_AP_PASSWORD` in `main/config.h` before relying on it: with the
-  default, anyone in radio range of a factory-fresh board can create the
-  account.
+- Everything between you and the board is encrypted and the board proves its
+  identity with a host key generated on first boot. A factory reset makes a
+  new one, so your client will warn about the change once.
+- Logging in to the board is by password only. Five wrong passwords from one
+  address block that address for five minutes, and a connection that has not
+  logged in within a minute is dropped. That slows guessing; it does not make
+  a weak password safe, and three connection slots are easy to tie up, so
+  think before forwarding port 22 from the internet.
+- A factory-new board lets the first visitor in without a password to create
+  the account. Change `C3_AP_PASSWORD` in `main/config.h` before relying on
+  it: with the default, that first visitor could be anyone in radio range.
 - The account password is stored as a salted PBKDF2-SHA256 hash; the WiFi
-  password and the board's SSH private key are stored in flash unencrypted.
+  password and the board's SSH private keys are stored in flash unencrypted.
 
 ## Layout
 

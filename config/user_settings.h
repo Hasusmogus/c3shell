@@ -63,12 +63,14 @@ extern int c3shell_rand_seed(unsigned char *out, unsigned int sz);
 #define CUSTOM_RAND_GENERATE_SEED c3shell_rand_seed
 #define NO_DEV_RANDOM
 
-/* ---- wolfSSH: client only, we supply the socket I/O ---- */
-#define NO_WOLFSSH_SERVER
+/* ---- wolfSSH: server (the login shell) and client (outbound ssh);
+ *      we supply the socket I/O ---- */
+#define WOLFSSH_SHELL            /* window-change requests from the user's terminal */
+#define WOLFSSH_ALLOW_USERAUTH_NONE /* only granted while no account exists (first boot) */
 #define WOLFSSH_SMALL_STACK
 #define WOLFSSH_USER_IO
 #define WOLFSSH_TERM
-#define NO_TERMIOS               /* the "terminal" is a telnet client, not a tty */
+#define NO_TERMIOS               /* the terminal is at the far end of an SSH channel */
 #define WOLFSSH_KEYBOARD_INTERACTIVE
 #define DEFAULT_WINDOW_SZ      (16 * 1024)
 #define DEFAULT_MAX_PACKET_SZ  (4 * 1024)

@@ -80,7 +80,7 @@ void port_sleep_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 void port_random(void *buf, size_t len) { esp_fill_random(buf, len); }
 long port_free_heap(void) { return (long)esp_get_free_heap_size(); }
 long port_stack_headroom(void) { return (long)uxTaskGetStackHighWaterMark(NULL); }
-int  port_telnet_port(void) { return 23; }
+int  port_listen_port(void) { return 22; }
 
 void port_reboot(void)
 {

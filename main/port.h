@@ -24,7 +24,7 @@ int      port_thread_start(const char *name, size_t stack, void (*fn)(void *), v
 long     port_free_heap(void);        /* -1 if unknown */
 long     port_stack_headroom(void);   /* bytes never used on the calling thread's stack, -1 if unknown */
 void     port_device_id(char out[5]); /* 4 hex chars, unique per board */
-int      port_telnet_port(void);
+int      port_listen_port(void);      /* where the SSH server listens */
 bool     port_sock_via_ap(int fd);    /* did this client arrive over the setup network? */
 
 /* ---- WiFi ---- */

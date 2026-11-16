@@ -1,4 +1,4 @@
-/* Per-login flow: first-boot account creation or login, then the command shell. */
+/* Per-connection flow: first-boot account creation if needed, then the command shell. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,16 +32,25 @@ static int read_new_password(session_t *s, char *out, size_t cap)
     }
 }
 
+/* Runs for a connection that was let in because no account existed.
+ * 0 = account created, anything else = hang up. */
 static int first_boot_setup(session_t *s)
 {
-    char user[40], pass[64];
+    char user[40], pass[64], prompt[80];
+    bool suggest = account_valid_username(s->user);
 
     tn_puts(s, "\n*** First-time setup ***\n"
                "This device has no account yet. Create the one you will log in with.\n\n");
+    if (suggest)
+        snprintf(prompt, sizeof prompt, "New username [%s]: ", s->user);
+    else
+        snprintf(prompt, sizeof prompt, "New username: ");
     for (;;) {
-        int n = tn_readline(s, "New username: ", user, sizeof user, RL_ECHO, 120);
+        int n = tn_readline(s, prompt, user, sizeof user, RL_ECHO, 120);
         if (n < 0)
             return -1;
+        if (n == 0 && suggest)
+            snprintf(user, sizeof user, "%s", s->user);
         if (account_valid_username(user))
             break;
         tn_puts(s, "Use 1-31 characters: letters, digits, '.', '_' or '-'.\n");
@@ -51,34 +60,14 @@ static int first_boot_setup(session_t *s)
     int r = account_create(user, pass);
     memset(pass, 0, sizeof pass);
     if (r != 0) {
-        tn_puts(s, "An account was created from another connection in the meantime.\n");
-        return 1;                               /* go through the normal login instead */
+        tn_puts(s, "An account was created from another connection in the meantime.\n"
+                   "Connect again and log in with it.\n");
+        return -1;
     }
     snprintf(s->user, sizeof s->user, "%.31s", user);
     port_log("account '%s' created", user);
-    tn_printf(s, "\nAccount '%s' created.\n", user);
+    tn_printf(s, "\nAccount '%s' created. From now on, log in with:  ssh %s@<this device>\n", user, user);
     return 0;
-}
-
-static int login(session_t *s)
-{
-    char user[40], pass[64];
-    for (int i = 0; i < C3_LOGIN_TRIES; i++) {
-        if (tn_readline(s, "login: ", user, sizeof user, RL_ECHO, 60) < 0)
-            return -1;
-        if (tn_readline(s, "Password: ", pass, sizeof pass, 0, 60) < 0)
-            return -1;
-        bool ok = account_check(user, pass);
-        memset(pass, 0, sizeof pass);
-        if (ok) {
-            snprintf(s->user, sizeof s->user, "%.31s", user);
-            return 0;
-        }
-        port_log("session %d: failed login from %s", s->id, s->peer);
-        port_sleep_ms(2000);
-        tn_puts(s, "Login incorrect\n\n");
-    }
-    return -1;
 }
 
 /* ---------------- commands ---------------- */
@@ -90,7 +79,8 @@ static int cmd_help(session_t *s, int argc, char **argv)
     tn_puts(s,
             "  wifi                      pick a WiFi network to join (scan + select)\n"
             "  wifi forget               forget the saved network, host the setup network\n"
-            "  ssh [user@]host [-p port] open a shell on another machine  (~. hangs up)\n"
+            "  ssh [user@]host [-p port] open a shell on another machine\n"
+            "                            (hang up a stuck one with ~. on a new line; ~~. from OpenSSH)\n"
             "  sshkey [new]              show (or regenerate) this device's public key\n"
             "  hosts                     list remembered SSH host keys\n"
             "  hosts forget <n|name>     forget one\n"
@@ -168,7 +158,7 @@ static int wifi_join(session_t *s, const port_ap_t *ap)
     tn_printf(s, "\nJoined '%s'. This device is now at %s.\n", ap->ssid, st.sta_ip);
     if (st.ap_up)
         tn_printf(s, "The setup network '%s' is shutting down now.\n", st.ap_ssid);
-    tn_printf(s, "Join '%s' yourself and reconnect with:  telnet %s\n\n", ap->ssid, st.sta_ip);
+    tn_printf(s, "Join '%s' yourself and reconnect with:  ssh %s@%s\n\n", ap->ssid, s->user, st.sta_ip);
     port_sleep_ms(C3_AP_LINGER_MS);
     netmgr_drop_ap();
     return CMD_EXIT;        /* this connection does not survive the switch */
@@ -189,7 +179,7 @@ static int cmd_wifi(session_t *s, int argc, char **argv)
         tn_printf(s, "Forget '%s' and go back to hosting '%s'?", st.sta_ssid, st.ap_ssid);
         if (!tn_confirm(s, ""))
             return CMD_OK;
-        tn_printf(s, "Done. Find this device on the WiFi network '%s' (telnet %s).\n", st.ap_ssid, st.ap_ip);
+        tn_printf(s, "Done. Find this device on the WiFi network '%s' (ssh %s@%s).\n", st.ap_ssid, s->user, st.ap_ip);
         port_sleep_ms(500);
         netmgr_forget();
         return s->via_ap ? CMD_OK : CMD_EXIT;
@@ -358,7 +348,7 @@ static int cmd_factory_reset(session_t *s, int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    if (!tn_confirm(s, "This erases the account, the saved WiFi network, known hosts and the SSH key."))
+    if (!tn_confirm(s, "This erases the account, the saved WiFi network, known hosts and both SSH keys\n(your SSH client will warn that this device's host key changed)."))
         return CMD_OK;
     tn_puts(s, "Erasing and rebooting ...\n");
     port_log("factory reset requested by %s", s->user);
@@ -408,11 +398,11 @@ void session_main(session_t *s)
     net_status_t st;
 
     port_device_id(id);
-    tn_init(s);
-    tn_printf(s, "\n%s %s (device %s)\n", C3_NAME, C3_VERSION, id);
+    tn_printf(s, "%s %s (device %s)\n", C3_NAME, C3_VERSION, id);
 
-    int r = account_exists() ? 1 : first_boot_setup(s);
-    if (r < 0 || (r == 1 && login(s) < 0))
+    /* The SSH layer already checked the password - unless there was no
+     * account to check against, in which case one has to be created now. */
+    if (s->setup && first_boot_setup(s) != 0)
         return;
     port_log("session %d: %s logged in", s->id, s->user);
 

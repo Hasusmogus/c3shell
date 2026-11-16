@@ -8,7 +8,23 @@
 #include "config.h"
 #include "port.h"
 
-/* ---------- telnet session ---------- */
+struct WOLFSSH;
+
+/* ---------- SSH transport glue (sshio.c) ---------- */
+typedef struct {
+    int      fd;
+    bool     nonblock;        /* reads return "try again" instead of waiting */
+    int      io_ms;           /* how long a blocking read may wait */
+    uint32_t deadline_s;      /* uptime after which reads fail; 0 = none */
+    volatile bool *kick;      /* owner is being told to stop */
+} sshio_t;
+
+void sshio_attach(struct WOLFSSH *ssh, sshio_t *io);     /* use io for this connection */
+void sshio_ctx_setup(void *wolfssh_ctx);
+int  sshio_read(struct WOLFSSH *ssh, uint8_t *buf, int cap);   /* >0 bytes, 0 nothing yet, -1 over */
+int  sshio_write(struct WOLFSSH *ssh, sshio_t *io, const uint8_t *data, int len);  /* 0 or -1 */
+
+/* ---------- terminal session ---------- */
 #define TN_CLOSED  (-1)
 #define TN_TIMEOUT (-2)
 #define TN_INTR    (-3)   /* Ctrl-C */
@@ -21,19 +37,17 @@
 #define LINE_MAX_ 160
 
 typedef struct session {
-    int      fd;
     int      id;
     bool     via_ap;
     bool     closed;
     volatile bool kick;      /* set by another thread: end this session */
-    /* telnet protocol decoder */
-    uint8_t  tstate, tcmd;
-    uint8_t  sb[12];
-    uint8_t  sblen;
-    bool     in_binary;
+    bool     setup;          /* let in without a password because no account exists yet */
+    uint32_t peer_ip;
+    struct WOLFSSH *ssh;     /* the user's connection to us */
+    sshio_t  io;
     uint16_t cols, rows;
     bool     winch;
-    /* decoded input waiting to be consumed */
+    /* input waiting to be consumed */
     uint8_t  ibuf[256];
     uint16_t ipos, ilen;
     /* shell */
@@ -43,17 +57,16 @@ typedef struct session {
     int      hist_n;
 } session_t;
 
-void tn_init(session_t *s);
 int  tn_getc(session_t *s, int timeout_ms);
 int  tn_read_avail(session_t *s, uint8_t *buf, int cap);  /* non-blocking: n, 0, or TN_CLOSED */
-bool tn_pending(session_t *s);
-int  tn_write(session_t *s, const void *data, size_t len); /* raw bytes (IAC-escaped) */
+int  tn_write(session_t *s, const void *data, size_t len); /* raw bytes */
 void tn_puts(session_t *s, const char *str);               /* text, \n -> \r\n */
 void tn_printf(session_t *s, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 int  tn_readline(session_t *s, const char *prompt, char *buf, size_t cap, int flags, int timeout_s);
 bool tn_confirm(session_t *s, const char *question);       /* requires typing "yes" */
 
 /* ---------- server ---------- */
+extern int guard_block_s;
 void c3shell_main(void);               /* start everything; never returns */
 int  server_session_count(void);
 void server_kick_ap_sessions(void);
@@ -82,11 +95,11 @@ int  netmgr_join(const char *ssid, const char *pass);
 void netmgr_drop_ap(void);
 void netmgr_forget(void);
 
-/* ---------- ssh ---------- */
-void ssh_global_init(void);
+/* ---------- outbound ssh + stored keys ---------- */
 int  ssh_run(session_t *s, const char *user, const char *host, int port);
-int  sshstore_pubkey_line(char *out, size_t cap, bool regen);
+int  sshstore_pubkey_line(char *out, size_t cap, bool regen);          /* device identity (outbound logins) */
 int  sshstore_identity(uint8_t *der, size_t dercap, uint8_t pub[32]);  /* DER length or -1 */
+int  sshstore_hostkey(uint8_t *der, size_t dercap, char *fp, size_t fpcap); /* this device's server key */
 enum { KH_NEW, KH_MATCH, KH_CHANGED };
 int  sshstore_host_check(const char *name, const uint8_t fp[32]);
 void sshstore_host_add(const char *name, const uint8_t fp[32]);

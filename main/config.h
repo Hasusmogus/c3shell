@@ -3,7 +3,7 @@
 #define C3_CONFIG_H
 
 #define C3_NAME            "c3shell"
-#define C3_VERSION         "0.1"
+#define C3_VERSION         "0.2"
 
 /* Setup network hosted while the device has no WiFi to join.
  * SSID is this prefix + the last two MAC bytes, e.g. "c3shell-2D90".
@@ -11,10 +11,12 @@
 #define C3_AP_SSID_PREFIX  "c3shell-"
 #define C3_AP_PASSWORD     "c3shell-setup"
 
-#define C3_MAX_SESSIONS    2          /* simultaneous telnet logins */
+#define C3_MAX_SESSIONS    3          /* simultaneous SSH connections, including ones still logging in */
 #define C3_SESSION_STACK   (24 * 1024)
 #define C3_IDLE_TIMEOUT_S  900        /* at the prompt; not during ssh */
-#define C3_LOGIN_TRIES     3
+#define C3_LOGIN_GRACE_S   60         /* a connection must finish logging in within this */
+#define C3_GUARD_FAILS     5          /* wrong passwords from one address before it is blocked ... */
+#define C3_GUARD_BLOCK_S   300        /* ... for this long */
 #define C3_PW_MIN          6
 #define C3_PBKDF2_ITERS    3000
 

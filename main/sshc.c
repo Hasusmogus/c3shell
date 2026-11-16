@@ -1,5 +1,5 @@
-/* SSH client: bridges a telnet session to an interactive shell on another
- * machine. Host keys are trusted on first use and pinned afterwards; login
+/* Outbound SSH client: bridges the user's session to an interactive shell on
+ * another machine. Host keys are trusted on first use and pinned afterwards; login
  * tries the device's own key first, then password / keyboard-interactive. */
 #include <errno.h>
 #include <fcntl.h>
@@ -30,9 +30,7 @@
 typedef struct {
     session_t *s;
     WOLFSSH   *ssh;
-    int        fd;
-    bool       nonblock;
-    int        io_ms;
+    sshio_t    io;
     char       target[80];           /* user@host, for prompts */
     char       khname[64];           /* known-hosts key */
     /* auth state */
@@ -47,52 +45,7 @@ typedef struct {
     word32     kb_len[KBD_MAX];
 } sshc_t;
 
-void ssh_global_init(void)
-{
-    wolfSSH_Init();
-}
-
 /* ---------------- transport ---------------- */
-
-static int io_recv(WOLFSSH *ssh, void *buf, word32 sz, void *vctx)
-{
-    sshc_t *c = vctx;
-    (void)ssh;
-    if (!c->nonblock) {
-        /* Wait in short steps so a session that is being ended lets go promptly. */
-        for (int waited = 0;; waited += 500) {
-            fd_set rd;
-            struct timeval tv = { 0, 500000 };
-            if (waited >= c->io_ms || c->s->kick)
-                return WS_CBIO_ERR_TIMEOUT;
-            FD_ZERO(&rd);
-            FD_SET(c->fd, &rd);
-            if (select(c->fd + 1, &rd, NULL, NULL, &tv) > 0)
-                break;
-        }
-    }
-    ssize_t n = recv(c->fd, buf, sz, MSG_DONTWAIT);
-    if (n > 0)
-        return (int)n;
-    if (n == 0)
-        return WS_CBIO_ERR_CONN_CLOSE;
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-        return WS_CBIO_ERR_WANT_READ;
-    return errno == ECONNRESET ? WS_CBIO_ERR_CONN_RST : WS_CBIO_ERR_GENERAL;
-}
-
-static int io_send(WOLFSSH *ssh, void *buf, word32 sz, void *vctx)
-{
-    sshc_t *c = vctx;
-    (void)ssh;
-    ssize_t n;
-    do {
-        n = send(c->fd, buf, sz, MSG_NOSIGNAL);
-    } while (n < 0 && errno == EINTR);
-    if (n > 0)
-        return (int)n;
-    return (errno == EPIPE || errno == ECONNRESET) ? WS_CBIO_ERR_CONN_CLOSE : WS_CBIO_ERR_GENERAL;
-}
 
 static int dial(session_t *s, const char *host, int port)
 {
@@ -273,101 +226,21 @@ static int auth_cb(byte type, WS_UserAuthData *d, void *vctx)
 
 /* ---------------- interactive bridge ---------------- */
 
-static bool soft_error(int e)
-{
-    return e == WS_WANT_READ || e == WS_WANT_WRITE || e == WS_REKEYING || e == WS_CHAN_RXD ||
-           e == WS_WINDOW_FULL;
-}
-
-/* Move everything the server has sent to the telnet client.
- * 0 = keep going, -1 = the session is over. */
-static int pump_remote(sshc_t *c, uint8_t *buf, int cap)
-{
-    for (int guard = 0; guard < 32; guard++) {
-        int n = wolfSSH_stream_read(c->ssh, buf, (word32)cap);
-        if (n > 0) {
-            if (tn_write(c->s, buf, (size_t)n) < 0)
-                return -1;
-            continue;
-        }
-        if (n == WS_EXTDATA) {                      /* remote stderr */
-            while ((n = wolfSSH_extended_data_read(c->ssh, buf, (word32)cap)) > 0)
-                if (tn_write(c->s, buf, (size_t)n) < 0)
-                    return -1;
-            continue;
-        }
-        if (n == WS_EOF)
-            return -1;
-        int e = wolfSSH_get_error(c->ssh);
-        if (e == WS_WANT_READ || e == WS_WANT_WRITE)
-            return 0;
-        if (e == WS_REKEYING) {                     /* key re-exchange in progress */
-            if (wolfSSH_worker(c->ssh, NULL) < 0) {
-                e = wolfSSH_get_error(c->ssh);
-                if (e == WS_WANT_READ || e == WS_WANT_WRITE)
-                    return 0;
-                if (!soft_error(e))
-                    return -1;
-            }
-            continue;
-        }
-        if (e == WS_CHAN_RXD || e == WS_WINDOW_FULL)
-            continue;
-        return -1;
-    }
-    return 0;
-}
-
-static int send_remote(sshc_t *c, uint8_t *data, int len, uint8_t *scratch, int cap)
-{
-    int off = 0, stalls = 0;
-    while (off < len) {
-        int n = wolfSSH_stream_send(c->ssh, data + off, (word32)(len - off));
-        if (n > 0) {
-            off += n;
-            continue;
-        }
-        int e = wolfSSH_get_error(c->ssh);
-        if (!soft_error(n) && !soft_error(e))
-            return -1;
-        if (++stalls > 40)
-            return -1;
-        /* Window full or re-keying: wait for the server, then try again. */
-        fd_set rd;
-        struct timeval tv = { 0, 250000 };
-        FD_ZERO(&rd);
-        FD_SET(c->fd, &rd);
-        select(c->fd + 1, &rd, NULL, NULL, &tv);
-        if (pump_remote(c, scratch, cap) < 0)
-            return -1;
-    }
-    return 0;
-}
-
 static void bridge(sshc_t *c)
 {
     session_t *s = c->s;
-    uint8_t *buf = malloc(2048);
-    uint8_t *in = buf ? buf + 1024 : NULL, *out = buf ? buf + 1536 : NULL;   /* 1024 rx, 2 x 512 tx */
+    uint8_t *buf = malloc(1024 + 256 + 512);
+    uint8_t *in = buf ? buf + 1024 : NULL, *out = buf ? buf + 1280 : NULL;
     enum { E_LINE_START, E_TILDE, E_MID } esc = E_LINE_START;
 
     if (!buf)
         return;
-    c->nonblock = true;
-    if (pump_remote(c, buf, 1024) < 0)
-        goto done;
+    c->io.nonblock = true;
 
     while (!s->closed && !s->kick) {
-        fd_set rd;
-        struct timeval tv = { 1, 0 };
-        int maxfd = s->fd > c->fd ? s->fd : c->fd;
+        bool busy = false;
 
-        FD_ZERO(&rd);
-        FD_SET(s->fd, &rd);
-        FD_SET(c->fd, &rd);
-        if (!tn_pending(s) && select(maxfd + 1, &rd, NULL, NULL, &tv) < 0 && errno != EINTR)
-            break;
-
+        /* user -> remote */
         int n = tn_read_avail(s, in, 256);
         if (n == TN_CLOSED)
             break;
@@ -377,6 +250,7 @@ static void bridge(sshc_t *c)
         }
         if (n > 0) {
             int o = 0;
+            busy = true;
             for (int i = 0; i < n; i++) {           /* "~." at the start of a line hangs up */
                 uint8_t ch = in[i];
                 if (esc == E_TILDE) {
@@ -395,11 +269,32 @@ static void bridge(sshc_t *c)
                     esc = (ch == '\r' || ch == '\n') ? E_LINE_START : E_MID;
                 }
             }
-            if (o > 0 && send_remote(c, out, o, buf, 1024) < 0)
+            if (o > 0 && sshio_write(c->ssh, &c->io, out, o) < 0)
                 break;
         }
-        if (pump_remote(c, buf, 1024) < 0)
-            break;
+
+        /* remote -> user (a bounded burst, so typing stays responsive during floods) */
+        for (int i = 0; i < 16; i++) {
+            n = sshio_read(c->ssh, buf, 1024);
+            if (n < 0)
+                goto done;
+            if (n == 0)
+                break;
+            busy = true;
+            if (tn_write(s, buf, (size_t)n) < 0)
+                goto done;
+        }
+
+        if (!busy) {
+            fd_set rd;
+            struct timeval tv = { 1, 0 };
+            int maxfd = s->io.fd > c->io.fd ? s->io.fd : c->io.fd;
+            FD_ZERO(&rd);
+            FD_SET(s->io.fd, &rd);
+            FD_SET(c->io.fd, &rd);
+            if (select(maxfd + 1, &rd, NULL, NULL, &tv) < 0 && errno != EINTR)
+                break;
+        }
     }
 done:
     free(buf);
@@ -414,14 +309,14 @@ static int attempt(sshc_t *c, const char *user, const char *host, int port, int 
     int ret = -1;
 
     *err = 0;
-    c->fd = dial(s, host, port);
-    if (c->fd < 0)
+    c->io.fd = dial(s, host, port);
+    if (c->io.fd < 0)
         return -1;
+    c->io.kick = &s->kick;
 
     ctx = wolfSSH_CTX_new(WOLFSSH_ENDPOINT_CLIENT, NULL);
     if (ctx) {
-        wolfSSH_SetIORecv(ctx, io_recv);
-        wolfSSH_SetIOSend(ctx, io_send);
+        sshio_ctx_setup(ctx);
         wolfSSH_SetUserAuth(ctx, auth_cb);
         wolfSSH_CTX_SetPublicKeyCheck(ctx, hostkey_cb);
         c->ssh = wolfSSH_new(ctx);
@@ -430,8 +325,7 @@ static int attempt(sshc_t *c, const char *user, const char *host, int port, int 
         tn_puts(s, "ssh: out of memory\n");
         goto out;
     }
-    wolfSSH_SetIOReadCtx(c->ssh, c);
-    wolfSSH_SetIOWriteCtx(c->ssh, c);
+    sshio_attach(c->ssh, &c->io);
     wolfSSH_SetUserAuthCtx(c->ssh, c);
     wolfSSH_SetPublicKeyCheckCtx(c->ssh, c);
     wolfSSH_SetUsername(c->ssh, user);
@@ -444,8 +338,8 @@ static int attempt(sshc_t *c, const char *user, const char *host, int port, int 
         c->ssh->supportedAuth[3] = ID_NONE;
     }
 
-    c->nonblock = false;
-    c->io_ms = C3_SSH_IO_MS;
+    c->io.nonblock = false;
+    c->io.io_ms = C3_SSH_IO_MS;
     if (wolfSSH_connect(c->ssh) != WS_SUCCESS) {
         *err = wolfSSH_get_error(c->ssh);
         goto out;
@@ -455,8 +349,8 @@ static int attempt(sshc_t *c, const char *user, const char *host, int port, int 
         wolfSSH_ChangeTerminalSize(c->ssh, s->cols, s->rows, 0, 0);
     s->winch = false;
     bridge(c);
-    c->nonblock = false;
-    c->io_ms = 1500;
+    c->io.nonblock = false;
+    c->io.io_ms = 1500;
     wolfSSH_shutdown(c->ssh);
 out:
     if (c->ssh)
@@ -464,7 +358,7 @@ out:
     if (ctx)
         wolfSSH_CTX_free(ctx);
     c->ssh = NULL;
-    close(c->fd);
+    close(c->io.fd);
     return ret;
 }
 

@@ -1,17 +1,18 @@
 # Host-side targets. The firmware itself is built with PlatformIO (see README).
 #
 #   make sim        build the virtual ESP32-C3      -> build-sim/c3shell-sim
-#   make run        build and start it (telnet localhost 2323)
+#   make run        build and start it (ssh -p 2222 localhost)
 #   make run-fresh  same, but as a factory-new device (first-boot setup)
 #   make test       automated end-to-end test against the simulator
 #   make firmware   compile the real firmware (no flashing)
-#   make flash      compile, flash the board on /dev/ttyACM0, and start it
+#   make flash      compile, flash the board (first /dev/ttyACM*, or PORT=...), and start it
 #   make monitor    watch the board's serial log (shows the IP address it got)
 
 WOLFSSL := third_party/wolfssl
 WOLFSSH := third_party/wolfssh
 B       := build-sim
 PIO     ?= $(HOME)/esp/pio-venv/bin/pio
+PORT    ?= $(firstword $(wildcard /dev/ttyACM*))
 ESPTOOL ?= $(HOME)/.platformio/packages/tool-esptool/esptool
 
 CFLAGS  ?= -O1 -g
@@ -25,7 +26,7 @@ WC  := aes asn coding curve25519 ed25519 ecc error fe_operations ge_operations h
        logging memory pwdbased random rsa sha sha256 sha512 signature sp_int wc_port \
        wc_encrypt wolfmath
 SSH := internal io log port ssh keygen ossh misc
-APP := telnet account netmgr server shell sshstore sshc
+APP := term sshio account netmgr server shell sshstore sshc
 
 OBJS := $(APP:%=$(B)/app/%.o) $(B)/app/port_sim.o \
         $(WC:%=$(B)/wolfcrypt/%.o) $(SSH:%=$(B)/wolfssh/%.o)
@@ -69,11 +70,11 @@ test: sim
 firmware:
 	$(PIO) run
 flash:
-	$(PIO) run -t upload
+	$(PIO) run -t upload --upload-port $(PORT)
 	@# this board stays in the ROM downloader after a flash; kick it into the firmware
-	$(ESPTOOL) --port /dev/ttyACM0 --after watchdog-reset chip-id
+	$(ESPTOOL) --port $(PORT) --after watchdog-reset chip-id
 monitor:
-	$(PIO) device monitor
+	$(PIO) device monitor --port $(firstword $(wildcard /dev/ttyACM*))
 
 clean:
 	rm -rf $(B)

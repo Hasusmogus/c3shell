@@ -4,7 +4,8 @@
 # ///
 """End-to-end test of c3shell against the simulator (build-sim/c3shell-sim).
 
-Drives the device exactly like a person would: a telnet client that types.
+Drives the device exactly like a person would: the real OpenSSH client on a
+pseudo-terminal, with a script doing the typing.
 Covers first-boot account creation, login, the WiFi selector and the
 disappearing setup network, fallback when WiFi is lost, persistence across a
 reboot, and SSH (password, keyboard-interactive, public key, host-key
@@ -12,21 +13,24 @@ pinning) against a mock server and a real OpenSSH sshd.
 
 Run with:  make test
 """
+import fcntl
 import getpass
 import os
+import pty
 import re
+import select
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIM = os.path.join(ROOT, "build-sim", "c3shell-sim")
-IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
-NAWS, BINARY, ECHO, SGA = 31, 0, 1, 3
 
 
 def free_port():
@@ -37,67 +41,38 @@ def free_port():
     return p
 
 
-class Telnet:
-    """Just enough of a telnet client: answers negotiation, reports a window size."""
+class Client:
+    """The real OpenSSH client on a pseudo-terminal, driven like a person typing."""
 
-    def __init__(self, port, cols=100, rows=30):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+    def __init__(self, port, user, known_hosts, cols=100, rows=30, command=None):
         self.cols, self.rows = cols, rows
         self.text = b""
-        self.raw = b""
         self.eof = False
-
-    def _naws(self):
-        self.sock.sendall(bytes([IAC, SB, NAWS, self.cols >> 8, self.cols & 255, self.rows >> 8, self.rows & 255, IAC, SE]))
+        args = ["ssh", "-F", "/dev/null", "-p", str(port), "-o", f"UserKnownHostsFile={known_hosts}",
+                "-o", "StrictHostKeyChecking=accept-new", "-o", "LogLevel=ERROR", "-o", "PubkeyAuthentication=no",
+                "-o", "NumberOfPasswordPrompts=3", "-o", "ConnectTimeout=5", f"{user}@127.0.0.1"]
+        if command:
+            args += ["-tt", command]
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            os.execvp("ssh", args)
 
     def resize(self, cols, rows):
         self.cols, self.rows = cols, rows
-        self._naws()
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
     def _pump(self, timeout):
-        self.sock.settimeout(timeout)
-        try:
-            data = self.sock.recv(65536)
-        except socket.timeout:
+        if self.eof or not select.select([self.fd], [], [], timeout)[0]:
             return
+        try:
+            data = os.read(self.fd, 65536)
         except OSError:
             data = b""
         if not data:
             self.eof = True
             return
-        self.raw += data
-        while self.raw:
-            i = self.raw.find(bytes([IAC]))
-            if i < 0:
-                self.text += self.raw
-                self.raw = b""
-                break
-            self.text += self.raw[:i]
-            self.raw = self.raw[i:]
-            if len(self.raw) < 2:
-                break
-            cmd = self.raw[1]
-            if cmd == IAC:
-                self.text += b"\xff"
-                self.raw = self.raw[2:]
-            elif cmd in (DO, DONT, WILL, WONT):
-                if len(self.raw) < 3:
-                    break
-                opt = self.raw[2]
-                self.raw = self.raw[3:]
-                if cmd == DO and opt == NAWS:
-                    self.sock.sendall(bytes([IAC, WILL, NAWS]))
-                    self._naws()
-                elif cmd == DO and opt in (BINARY, SGA):
-                    self.sock.sendall(bytes([IAC, WILL, opt]))
-                elif cmd == DO:
-                    self.sock.sendall(bytes([IAC, WONT, opt]))
-                elif cmd == WILL and opt in (BINARY, SGA, ECHO):
-                    self.sock.sendall(bytes([IAC, DO, opt]))
-                elif cmd == WILL:
-                    self.sock.sendall(bytes([IAC, DONT, opt]))
-            else:
-                self.raw = self.raw[2:]
+        self.text += data
 
     def expect(self, pattern, timeout=15):
         """Wait for a regex; returns everything up to and including the match."""
@@ -118,30 +93,40 @@ class Telnet:
         end = time.time() + timeout
         while not self.eof:
             if time.time() > end:
-                raise AssertionError("connection was not closed by the device")
+                raise AssertionError(f"connection was not closed by the device; got:\n{self.text.decode(errors='replace')}")
             self._pump(0.2)
         out, self.text = self.text.decode(errors="replace"), b""
         return out
 
     def send(self, s):
-        self.sock.sendall(s.encode() if isinstance(s, str) else s)
+        os.write(self.fd, s.encode() if isinstance(s, str) else s)
 
     def line(self, s):
         self.send(s + "\r")
 
     def close(self):
-        self.sock.close()
+        try:
+            os.kill(self.pid, 9)
+            os.waitpid(self.pid, 0)
+        except OSError:
+            pass
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self.eof = True
 
 
 class Sim:
     def __init__(self, state, port, extra=()):
         self.port = port
+        self.known_hosts = os.path.join(os.path.dirname(state), "known_hosts")
         self.log = []
         self.proc = subprocess.Popen(
             [os.environ.get("C3SIM", SIM), "--fast", "--port", str(port), "--state", state, "--networks", os.path.join(ROOT, "sim", "networks.txt"), *extra],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         threading.Thread(target=self._reader, daemon=True).start()
-        self.wait_log("telnet: listening")
+        self.wait_log("ssh: listening")
 
     def _reader(self):
         for line in self.proc.stdout:
@@ -160,15 +145,8 @@ class Sim:
         self.proc.stdin.write(cmd + "\n")
         self.proc.stdin.flush()
 
-    def telnet(self, **kw):
-        end = time.time() + 10
-        while True:
-            try:
-                return Telnet(self.port, **kw)
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.1)
+    def connect(self, user="admin", **kw):
+        return Client(self.port, user, self.known_hosts, **kw)
 
     def stop(self):
         self.proc.kill()
@@ -176,10 +154,8 @@ class Sim:
 
 
 def login(sim, user="admin", password="secret-123", **kw):
-    t = sim.telnet(**kw)
-    t.expect("login: ")
-    t.line(user)
-    t.expect("Password: ")
+    t = sim.connect(user, **kw)
+    t.expect("password: ")
     t.line(password)
     t.expect(PROMPT)
     return t
@@ -198,17 +174,20 @@ def step(name):
 
 # --------------------------------------------------------------------------
 
-@step("first boot: hosts setup network, asks to create an account")
+@step("first boot: hosts setup network, lets you in to create an account")
 def t_first_boot(c):
     sim = c["sim"]
     sim.wait_log("hosting 'c3shell-51M0'")
-    t = sim.telnet()
+    assert any("host key fingerprint is SHA256:" in l for l in sim.log), "host key fingerprint not logged"
+    t = sim.connect("admin")                # no password asked: there is no account yet
     t.expect("First-time setup")
-    t.expect("New username: ")
+    eve = sim.connect("eve")                # a second visitor arrives during setup
+    eve.expect(r"New username \[eve\]: ")
+    t.expect(r"New username \[admin\]: ")
     t.line("bad name!")
     t.expect("Use 1-31 characters")
-    t.expect("New username: ")
-    t.line("admin")
+    t.expect(r"New username \[admin\]: ")
+    t.line("")                             # accept the suggested name
     t.expect("New password: ")
     t.line("abc")
     t.expect("Too short")
@@ -226,27 +205,47 @@ def t_first_boot(c):
     t.expect("No WiFi network chosen yet")
     t.expect(PROMPT)
     c["t"] = t
+    eve.line("")                           # the account now exists: eve must not get a shell
+    eve.expect("New password: ")
+    eve.line("eve-password")
+    eve.expect("Retype new password: ")
+    eve.line("eve-password")
+    eve.expect("created from another connection")
+    out = eve.expect_closed()
+    assert "c3shell-51M0>" not in out, out
 
 
-@step("a second connection now gets a login prompt, not the setup wizard")
+@step("once an account exists a password is required; session slots are limited")
 def t_second_conn(c):
-    t2 = c["sim"].telnet()
-    t2.expect("login: ")
-    t2.line("admin")
-    t2.expect("Password: ")
+    sim = c["sim"]
+    t2 = sim.connect("admin")
+    t2.expect("password: ")
     t2.line("wrong")
-    t2.expect("Login incorrect", timeout=10)
-    t2.expect("login: ")
-    t2.line("admin")
-    t2.expect("Password: ")
+    t2.expect("Permission denied, please try again")
+    t2.expect("password: ")
     t2.line("secret-123")
-    t2.expect(PROMPT)
-    t3 = c["sim"].telnet()
-    t3.expect("too many sessions")
-    t3.close()
+    out = t2.expect(PROMPT)
+    assert "First-time setup" not in out
+    tx = sim.connect("somebody-else")
+    tx.expect("password: ")
+    tx.line("secret-123")                  # right password, wrong user
+    tx.expect("Permission denied, please try again")
+    tx.close()
+    time.sleep(0.5)
+    t3 = login(sim)
+    t4 = sim.connect("admin")              # c["t"], t2, t3 hold all three slots
+    t4.expect_closed(timeout=10)
+    sim.wait_log("all 3 session slots are in use")
+    t3.line("exit")
+    t3.expect("Goodbye")
+    t3.expect_closed()
     t2.line("exit")
-    t2.expect("Goodbye")
     t2.expect_closed()
+    tc = sim.connect("admin", command="status")   # running a command instead of a shell
+    tc.expect("password: ")
+    tc.line("secret-123")
+    tc.expect("interactive logins only")
+    tc.expect_closed()
 
 
 @step("shell basics: help, status, unknown command, line editing, history")
@@ -309,7 +308,7 @@ def t_wifi_join(c):
     t.line("homepass123")
     t.expect("Joined 'HomeNet'. This device is now at 192.168.0.77")
     t.expect("setup network 'c3shell-51M0' is shutting down")
-    t.expect("telnet 192.168.0.77")
+    t.expect("ssh admin@192.168.0.77")
     t.expect_closed()                      # we were on the setup network: it is gone
     sim.wait_log("stopped hosting 'c3shell-51M0'")
     t = login(sim)
@@ -341,7 +340,7 @@ def t_ssh_password(c):
     t.expect("tester@127.0.0.1's password: ")
     t.line("pw-123456")
     t.expect(r"mock shell term=xterm")
-    t.expect("resized 100x30")             # the telnet window size is passed on right after login
+    t.expect("resized 100x30")             # your terminal size is passed on right after login
     t.expect(r"\$ ")
     t.line("hello there")
     t.expect("echo: hello there")
@@ -361,7 +360,7 @@ def t_ssh_password(c):
     assert "authenticity" not in out, out
     t.line("pw-123456")
     t.expect(r"\$ ")
-    t.send("\r~.")                         # escape sequence hangs up
+    t.send("\r~~.")                        # "~." for the inner connection; OpenSSH itself eats one "~"
     t.expect("Connection to 127.0.0.1 closed")
     t.expect(PROMPT)
 
@@ -542,52 +541,32 @@ def t_ssh_other_hostkeys(c):
         proc.terminate()
 
 
-@step("the real telnet program: character mode, remote echo, hidden password")
-def t_real_telnet(c):
-    import pty
-    import select as sel
-    if not shutil.which("telnet"):
-        return "skipped (no telnet program installed)"
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execvp("telnet", ["telnet", "127.0.0.1", str(c["sim"].port)])
-    buf = b""
-
-    def until(pat, timeout=10):
-        nonlocal buf
-        end = time.time() + timeout
-        while not re.search(pat, buf):
-            if time.time() > end:
-                raise AssertionError(f"telnet program: no {pat!r} in:\n{buf.decode(errors='replace')}")
-            if sel.select([fd], [], [], 0.2)[0]:
-                try:
-                    buf += os.read(fd, 4096)
-                except OSError:
-                    raise AssertionError(f"telnet program exited; output:\n{buf.decode(errors='replace')}")
-        out, buf = buf, b""
-        return out.decode(errors="replace")
-
-    try:
-        until(rb"login: ")
-        os.write(fd, b"admin\r")
-        out = until(rb"Password: ")
-        assert out.count("admin") == 1, f"username echoed {out.count('admin')} times (expected once):\n{out}"
-        os.write(fd, b"secret-123\r")
-        out = until(PROMPT.encode())
-        assert "secret-123" not in out, "password was echoed by the telnet program"
-        os.write(fd, b"status\r")
-        out = until(PROMPT.encode())
-        assert out.count("status") == 1 and "Sessions:" in out, out
-        assert "\r\r\n" not in out and "\n\n\n" not in out, f"line endings look doubled: {out!r}"
-        os.write(fd, b"exit\r")
-        until(rb"Goodbye")
-    finally:
-        try:
-            os.kill(pid, 9)
-            os.waitpid(pid, 0)
-        except OSError:
-            pass
-        os.close(fd)
+@step("repeated wrong passwords get the address blocked for a while")
+def t_lockout(c):
+    sim = c["sim"]
+    mark = len(sim.log)
+    a = sim.connect("admin")
+    for _ in range(3):
+        a.expect("password: ")
+        a.line("guess")
+    a.expect_closed()
+    b = sim.connect("admin")
+    b.expect("password: ")
+    b.line("guess")
+    b.expect("password: ")
+    b.line("guess")                        # fifth wrong one: the device hangs up
+    sim.wait_log("blocking 127.0.0.1", start=mark)
+    b.expect("password: ")                 # ssh only notices once it tries to send again
+    b.line("secret-123")
+    out = b.expect_closed()
+    assert "c3shell" not in out, out
+    d = sim.connect("admin")               # even the right password gets no chance now
+    out = d.expect_closed(timeout=10)
+    assert "password:" not in out, out
+    time.sleep(3.5)                        # the simulator runs with a 3 s block
+    d = login(sim)
+    d.line("exit")
+    d.expect_closed()
 
 
 @step("WiFi lost: falls back to the setup network, rejoins when it returns")
@@ -630,14 +609,12 @@ def t_reboot(c):
     t.line("reboot")
     t.expect_closed()
     sim.wait_log("joined 'HomeNet', address 192.168.0.77", start=mark)
-    sim.wait_log("telnet: listening", start=mark)
+    sim.wait_log("ssh: listening", start=mark)
     assert not any("hosting" in l for l in sim.log[mark:]), "setup network must stay off after reboot"
-    t = sim.telnet()
-    t.expect("login: ")
-    t.line("admin")
-    t.expect("Password: ")
+    t = sim.connect("admin")               # same host key as before, or ssh would refuse here
+    t.expect("password: ")
     t.line("secret-123")                   # old password no longer works
-    t.expect("Login incorrect")
+    t.expect("Permission denied, please try again")
     t.close()
     t = login(sim, password="new-secret-456")
     c["t"] = t
@@ -650,7 +627,7 @@ def t_reset(c):
     t.line("wifi forget")
     t.expect("Type 'yes' to confirm: ")
     t.line("yes")
-    t.expect("Find this device on the WiFi network 'c3shell-51M0'")
+    t.expect("Find this device on the WiFi network 'c3shell-51M0' \\(ssh admin@192.168.4.1\\)")
     sim.wait_log("hosting 'c3shell-51M0'", start=mark)
     t.close()
     t = login(sim, password="new-secret-456")
@@ -665,8 +642,12 @@ def t_reset(c):
     t.expect("Erasing and rebooting")
     t.expect_closed()
     sim.wait_log("no saved network", start=mark)
-    sim.wait_log("telnet: listening", start=mark)
-    t = sim.telnet()
+    sim.wait_log("ssh: listening", start=mark)
+    t = sim.connect("admin")               # a reset device has a new identity; ssh must notice
+    out = t.expect_closed()
+    assert "REMOTE HOST IDENTIFICATION HAS CHANGED" in out, out
+    os.unlink(sim.known_hosts)
+    t = sim.connect("admin")
     t.expect("First-time setup")
     t.close()
 
@@ -696,7 +677,7 @@ def main():
         mock_keys[port] = p
         return port
 
-    sim = Sim(os.path.join(tmp, "state"), free_port(), extra=("--fresh", "--fallback", "2", "--retry", "2"))
+    sim = Sim(os.path.join(tmp, "state"), free_port(), extra=("--fresh", "--fallback", "2", "--retry", "2", "--block", "3"))
     ctx = {"sim": sim, "tmp": tmp, "mock": mock, "procs": procs}
     failed = 0
     try:

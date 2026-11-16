@@ -1,6 +1,6 @@
 /* Host (Linux) implementation of port.h: the "virtual ESP32-C3".
  *
- * Real:      telnet server, shell, account store, SSH client (same code and
+ * Real:      SSH server, shell, account store, SSH client (same code and
  *            same crypto as the firmware), reaching real machines.
  * Simulated: the radio. WiFi networks come from sim/networks.txt, the setup
  *            network is a flag, and flash storage is a directory of files.
@@ -33,7 +33,7 @@ static simnet_t nets[NETS_MAX];
 static int nnets;
 static const char *state_dir = "sim/state";
 static const char *nets_file = "sim/networks.txt";
-static int telnet_port = 2323;
+static int listen_port = 2222;
 static int delay_scale = 100;          /* percent; --fast sets 3 */
 static char **saved_argv;
 static struct timespec t0;
@@ -54,7 +54,7 @@ static double now_s(void)
 uint32_t port_uptime_s(void) { return (uint32_t)now_s(); }
 void port_sleep_ms(uint32_t ms) { usleep(ms * 1000u); }
 long port_free_heap(void) { return -1; }
-int  port_telnet_port(void) { return telnet_port; }
+int  port_listen_port(void) { return listen_port; }
 void port_device_id(char out[5]) { memcpy(out, "51M0", 5); }
 
 void port_log(const char *fmt, ...)
@@ -284,8 +284,8 @@ int port_wifi_ap_start(const char *ssid, const char *pass)
     ap_up = true;
     snprintf(ap_name, sizeof ap_name, "%s", ssid);
     pthread_mutex_unlock(&wlock);
-    port_log("[sim] radio: hosting '%s' (%s) - reach it with: telnet localhost %d", ssid,
-             pass[0] ? "WPA2" : "open", telnet_port);
+    port_log("[sim] radio: hosting '%s' (%s) - reach it with: ssh -p %d localhost", ssid,
+             pass[0] ? "WPA2" : "open", listen_port);
     return 0;
 }
 
@@ -410,7 +410,7 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--fast") == 0)
             delay_scale = 3;
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
-            telnet_port = atoi(argv[++i]);
+            listen_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--state") == 0 && i + 1 < argc)
             state_dir = argv[++i];
         else if (strcmp(argv[i], "--networks") == 0 && i + 1 < argc)
@@ -419,10 +419,12 @@ int main(int argc, char **argv)
             netmgr_fallback_s = atoi(argv[++i]);
         else if (strcmp(argv[i], "--retry") == 0 && i + 1 < argc)
             netmgr_retry_s = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--block") == 0 && i + 1 < argc)
+            guard_block_s = atoi(argv[++i]);
         else {
             fprintf(stderr,
                     "usage: %s [--fresh] [--fast] [--big-stacks] [--port N] [--state DIR] [--networks FILE]\n"
-                    "          [--fallback SECONDS] [--retry SECONDS]\n", argv[0]);
+                    "          [--fallback SECONDS] [--retry SECONDS] [--block SECONDS]\n", argv[0]);
             return 2;
         }
     }

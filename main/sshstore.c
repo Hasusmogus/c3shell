@@ -1,5 +1,6 @@
-/* Persistent SSH state: known host keys (trust on first use) and the
- * device's own Ed25519 identity for public-key logins. */
+/* Persistent SSH state: known host keys of other machines (trust on first
+ * use), the device's Ed25519 identity for outbound public-key logins, and the
+ * host key of the device's own SSH server. */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include <wolfssl/wolfcrypt/coding.h>
 #include <wolfssl/wolfcrypt/ed25519.h>
 #include <wolfssl/wolfcrypt/random.h>
+#include <wolfssl/wolfcrypt/hash.h>
 #include "c3shell.h"
 
 typedef struct {
@@ -156,26 +158,28 @@ static int ident_make(ident_t *id)
     return r;
 }
 
-static int ident_get(ident_t *id, bool regen)
+static int ident_get(const char *slot, ident_t *id, bool regen)
 {
     int r = 0;
     pthread_mutex_lock(&lock);
-    if (regen || port_kv_get("sshkey", id, sizeof *id) != (int)sizeof *id || id->derlen == 0 ||
+    if (regen || port_kv_get(slot, id, sizeof *id) != (int)sizeof *id || id->derlen == 0 ||
         id->derlen > sizeof id->der) {
         memset(id, 0, sizeof *id);
         r = ident_make(id);
-        if (r == 0)
-            port_kv_set("sshkey", id, sizeof *id);
+        if (r == 0 && port_kv_set(slot, id, sizeof *id) != 0)
+            r = -1;
     }
     pthread_mutex_unlock(&lock);
     return r;
 }
 
+static const uint8_t blob_head[] = { 0, 0, 0, 11, 's', 's', 'h', '-', 'e', 'd', '2', '5', '5', '1', '9', 0, 0, 0, 32 };
+
 int sshstore_identity(uint8_t *der, size_t dercap, uint8_t pub[32])
 {
     ident_t id;
     int n = -1;
-    if (ident_get(&id, false) == 0 && id.derlen <= dercap) {
+    if (ident_get("sshkey", &id, false) == 0 && id.derlen <= dercap) {
         n = id.derlen;
         memcpy(der, id.der, id.derlen);
         memcpy(pub, id.pub, 32);
@@ -184,19 +188,36 @@ int sshstore_identity(uint8_t *der, size_t dercap, uint8_t pub[32])
     return n;
 }
 
+int sshstore_hostkey(uint8_t *der, size_t dercap, char *fp, size_t fpcap)
+{
+    ident_t id;
+    uint8_t blob[sizeof blob_head + 32], hash[32];
+    int n = -1;
+    if (ident_get("hostkey", &id, false) == 0 && id.derlen <= dercap) {
+        memcpy(blob, blob_head, sizeof blob_head);
+        memcpy(blob + sizeof blob_head, id.pub, 32);
+        if (wc_Sha256Hash(blob, sizeof blob, hash) == 0) {
+            sshstore_fp_text(hash, fp, fpcap);
+            memcpy(der, id.der, id.derlen);
+            n = id.derlen;
+        }
+    }
+    memset(&id, 0, sizeof id);
+    return n;
+}
+
 int sshstore_pubkey_line(char *out, size_t cap, bool regen)
 {
-    static const uint8_t head[] = { 0, 0, 0, 11, 's', 's', 'h', '-', 'e', 'd', '2', '5', '5', '1', '9', 0, 0, 0, 32 };
     ident_t id;
-    uint8_t blob[sizeof head + 32];
+    uint8_t blob[sizeof blob_head + 32];
     byte b64[96];
     word32 len = sizeof b64;
     char dev[5];
 
-    if (ident_get(&id, regen) != 0)
+    if (ident_get("sshkey", &id, regen) != 0)
         return -1;
-    memcpy(blob, head, sizeof head);
-    memcpy(blob + sizeof head, id.pub, 32);
+    memcpy(blob, blob_head, sizeof blob_head);
+    memcpy(blob + sizeof blob_head, id.pub, 32);
     memset(&id, 0, sizeof id);
     if (Base64_Encode_NoNl(blob, sizeof blob, b64, &len) != 0)
         return -1;
