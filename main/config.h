@@ -1,0 +1,30 @@
+/* c3shell tunables */
+#ifndef C3_CONFIG_H
+#define C3_CONFIG_H
+
+#define C3_NAME            "c3shell"
+#define C3_VERSION         "0.1"
+
+/* Setup network hosted while the device has no WiFi to join.
+ * SSID is this prefix + the last two MAC bytes, e.g. "c3shell-2D90".
+ * Password must be >= 8 chars (WPA2); set to "" for an open network. */
+#define C3_AP_SSID_PREFIX  "c3shell-"
+#define C3_AP_PASSWORD     "c3shell-setup"
+
+#define C3_MAX_SESSIONS    2          /* simultaneous telnet logins */
+#define C3_SESSION_STACK   (24 * 1024)
+#define C3_IDLE_TIMEOUT_S  900        /* at the prompt; not during ssh */
+#define C3_LOGIN_TRIES     3
+#define C3_PW_MIN          6
+#define C3_PBKDF2_ITERS    3000
+
+#define C3_JOIN_TIMEOUT_MS 15000
+#define C3_FALLBACK_S      30         /* WiFi lost this long -> host setup network again */
+#define C3_RETRY_S         60         /* while hosting, retry the saved network this often */
+#define C3_AP_LINGER_MS    3000       /* after a successful join, before the setup network vanishes */
+
+#define C3_KNOWN_HOSTS     16
+#define C3_SSH_CONNECT_MS  8000
+#define C3_SSH_IO_MS       20000
+
+#endif

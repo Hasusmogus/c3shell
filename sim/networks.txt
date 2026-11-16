@@ -1,0 +1,6 @@
+# WiFi networks the simulated radio can "see":  ssid|password|signal(dBm)
+# An empty password means an open network. Edit freely, then restart the simulator.
+HomeNet|homepass123|-48
+Workshop-2.4|soldering-iron|-66
+CoffeeShop Free||-72
+Neighbour_5F|you-do-not-know-this|-86
