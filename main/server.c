@@ -184,10 +184,16 @@ static void session_thread(void *arg)
         if (wolfSSH_accept(s->ssh) == WS_SUCCESS) {
             s->io.deadline_s = 0;
             WS_SessionType t = wolfSSH_GetSessionType(s->ssh);
-            if (t == WOLFSSH_SESSION_SHELL || t == WOLFSSH_SESSION_TERMINAL)
+            if (t == WOLFSSH_SESSION_SHELL || t == WOLFSSH_SESSION_TERMINAL) {
                 session_main(s);
-            else
-                tn_puts(s, C3_NAME ": interactive logins only\n");
+            } else if (s->setup) {
+                tn_puts(s, C3_NAME ": this device has no account yet - log in interactively first\n");
+                wolfSSH_SetExitStatus(s->ssh, 1);
+            } else {
+                const char *cmd = wolfSSH_GetSessionCommand(s->ssh);
+                int st = xfer_serve(s, t == WOLFSSH_SESSION_SUBSYSTEM, cmd ? cmd : "");
+                wolfSSH_SetExitStatus(s->ssh, (word32)st);
+            }
             if (!s->closed && !s->kick) {
                 s->io.nonblock = false;
                 s->io.io_ms = 1500;

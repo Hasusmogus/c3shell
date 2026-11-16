@@ -27,8 +27,9 @@
 
 #define KBD_MAX 4
 
-typedef struct {
+struct sshc {
     session_t *s;
+    WOLFSSH_CTX *ctx;
     WOLFSSH   *ssh;
     sshio_t    io;
     char       target[80];           /* user@host, for prompts */
@@ -43,7 +44,7 @@ typedef struct {
     char       kb_resp[KBD_MAX][128];
     byte      *kb_ptr[KBD_MAX];
     word32     kb_len[KBD_MAX];
-} sshc_t;
+};
 
 /* ---------------- transport ---------------- */
 
@@ -51,7 +52,7 @@ static int dial(session_t *s, const char *host, int port)
 {
     struct addrinfo hints = { 0 }, *res = NULL;
     char portstr[8];
-    int fd = -1;
+    int fd, r;
 
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -60,11 +61,25 @@ static int dial(session_t *s, const char *host, int port)
         tn_printf(s, "ssh: could not resolve hostname %s\n", host);
         return -1;
     }
-    fd = socket(res->ai_family, res->ai_socktype, 0);
-    if (fd >= 0) {
+    struct sockaddr_in sin = *(struct sockaddr_in *)res->ai_addr;
+    freeaddrinfo(res);
+
+    /* In the simulator, addresses behind the VPN are reached through the
+     * VPN's own TCP/IP stack; on the chip this is always -2 (lwIP routes). */
+    fd = vpn_dial(sin.sin_addr.s_addr, (uint16_t)port, C3_SSH_CONNECT_MS);
+    if (fd == -1) {
+        tn_printf(s, "ssh: connect to %s port %d (through the VPN) failed\n", host, port);
+        return -1;
+    }
+    if (fd < 0) {
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) {
+            tn_printf(s, "ssh: %s\n", strerror(errno));
+            return -1;
+        }
         int fl = fcntl(fd, F_GETFL, 0);
         fcntl(fd, F_SETFL, fl | O_NONBLOCK);
-        int r = connect(fd, res->ai_addr, res->ai_addrlen);
+        r = connect(fd, (struct sockaddr *)&sin, sizeof sin);
         if (r < 0 && errno == EINPROGRESS) {
             fd_set wr;
             struct timeval tv = { C3_SSH_CONNECT_MS / 1000, (C3_SSH_CONNECT_MS % 1000) * 1000 };
@@ -86,17 +101,15 @@ static int dial(session_t *s, const char *host, int port)
         if (r < 0) {
             tn_printf(s, "ssh: connect to %s port %d: %s\n", host, port, strerror(errno));
             close(fd);
-            fd = -1;
-        } else {
-            int on = 1;
-            struct timeval tv = { 10, 0 };
-            fcntl(fd, F_SETFL, fl);
-            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
-            setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+            return -1;
         }
+        fcntl(fd, F_SETFL, fl);
     }
-    freeaddrinfo(res);
+    int on = 1;
+    struct timeval tv = { 10, 0 };
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     return fd;
 }
 
@@ -300,13 +313,12 @@ done:
     free(buf);
 }
 
-/* ---------------- entry point ---------------- */
+/* ---------------- connections ---------------- */
 
-static int attempt(sshc_t *c, const char *user, const char *host, int port, int *err)
+/* Connect and log in; on success the connection stays open in c. */
+static int attempt(sshc_t *c, const char *user, const char *host, int port, const char *cmd, int *err)
 {
     session_t *s = c->s;
-    WOLFSSH_CTX *ctx = NULL;
-    int ret = -1;
 
     *err = 0;
     c->io.fd = dial(s, host, port);
@@ -314,22 +326,25 @@ static int attempt(sshc_t *c, const char *user, const char *host, int port, int 
         return -1;
     c->io.kick = &s->kick;
 
-    ctx = wolfSSH_CTX_new(WOLFSSH_ENDPOINT_CLIENT, NULL);
-    if (ctx) {
-        sshio_ctx_setup(ctx);
-        wolfSSH_SetUserAuth(ctx, auth_cb);
-        wolfSSH_CTX_SetPublicKeyCheck(ctx, hostkey_cb);
-        c->ssh = wolfSSH_new(ctx);
+    c->ctx = wolfSSH_CTX_new(WOLFSSH_ENDPOINT_CLIENT, NULL);
+    if (c->ctx) {
+        sshio_ctx_setup(c->ctx);
+        wolfSSH_SetUserAuth(c->ctx, auth_cb);
+        wolfSSH_CTX_SetPublicKeyCheck(c->ctx, hostkey_cb);
+        c->ssh = wolfSSH_new(c->ctx);
     }
     if (!c->ssh) {
         tn_puts(s, "ssh: out of memory\n");
-        goto out;
+        goto fail;
     }
     sshio_attach(c->ssh, &c->io);
     wolfSSH_SetUserAuthCtx(c->ssh, c);
     wolfSSH_SetPublicKeyCheckCtx(c->ssh, c);
     wolfSSH_SetUsername(c->ssh, user);
-    wolfSSH_SetChannelType(c->ssh, WOLFSSH_SESSION_TERMINAL, NULL, 0);
+    if (cmd)
+        wolfSSH_SetChannelType(c->ssh, WOLFSSH_SESSION_EXEC, (byte *)cmd, (word32)strlen(cmd));
+    else
+        wolfSSH_SetChannelType(c->ssh, WOLFSSH_SESSION_TERMINAL, NULL, 0);
     if (c->use_key) {
         /* Hold keyboard-interactive back until the key has had its turn. */
         c->ssh->supportedAuth[0] = ID_USERAUTH_PUBLICKEY;
@@ -340,29 +355,21 @@ static int attempt(sshc_t *c, const char *user, const char *host, int port, int 
 
     c->io.nonblock = false;
     c->io.io_ms = C3_SSH_IO_MS;
-    if (wolfSSH_connect(c->ssh) != WS_SUCCESS) {
-        *err = wolfSSH_get_error(c->ssh);
-        goto out;
-    }
-    ret = 0;
-    if (s->cols != 80 || s->rows != 24)
-        wolfSSH_ChangeTerminalSize(c->ssh, s->cols, s->rows, 0, 0);
-    s->winch = false;
-    bridge(c);
-    c->io.nonblock = false;
-    c->io.io_ms = 1500;
-    wolfSSH_shutdown(c->ssh);
-out:
+    if (wolfSSH_connect(c->ssh) == WS_SUCCESS)
+        return 0;
+    *err = wolfSSH_get_error(c->ssh);
+fail:
     if (c->ssh)
         wolfSSH_free(c->ssh);
-    if (ctx)
-        wolfSSH_CTX_free(ctx);
+    if (c->ctx)
+        wolfSSH_CTX_free(c->ctx);
     c->ssh = NULL;
+    c->ctx = NULL;
     close(c->io.fd);
-    return ret;
+    return -1;
 }
 
-int ssh_run(session_t *s, const char *user, const char *host, int port)
+sshc_t *sshc_open(session_t *s, const char *user, const char *host, int port, const char *cmd)
 {
     static const uint8_t head[] = { 0, 0, 0, 11, 's', 's', 'h', '-', 'e', 'd', '2', '5', '5', '1', '9', 0, 0, 0, 32 };
     sshc_t *c = calloc(1, sizeof *c);
@@ -370,7 +377,7 @@ int ssh_run(session_t *s, const char *user, const char *host, int port)
 
     if (!c) {
         tn_puts(s, "ssh: out of memory\n");
-        return -1;
+        return NULL;
     }
     c->s = s;
     snprintf(c->target, sizeof c->target, "%.31s@%.40s", user, host);
@@ -383,18 +390,21 @@ int ssh_run(session_t *s, const char *user, const char *host, int port)
     c->derlen = sshstore_identity(c->der, sizeof c->der, c->pubblob + sizeof head);
     c->use_key = c->derlen > 0;
 
-    ret = attempt(c, user, host, port, &err);
+    ret = attempt(c, user, host, port, cmd, &err);
     if (ret < 0 && c->use_key && !c->key_offered && !c->prompted && !c->hostkey_bad &&
         !s->closed && err == WS_USER_AUTH_E) {
         /* The server offers neither public-key nor password logins (only
          * keyboard-interactive): go again without holding that method back. */
         c->use_key = false;
-        ret = attempt(c, user, host, port, &err);
+        ret = attempt(c, user, host, port, cmd, &err);
+    }
+    if (ret == 0) {
+        memset(c->pw, 0, sizeof c->pw);
+        memset(c->kb_resp, 0, sizeof c->kb_resp);
+        return c;
     }
 
-    if (ret == 0) {
-        tn_printf(s, "\nConnection to %s closed.\n", host);
-    } else if (err != 0 && !s->closed) {
+    if (err != 0 && !s->closed) {
         if (c->hostkey_bad)
             tn_puts(s, "Host key verification failed.\n");
         else if (c->aborted)
@@ -409,5 +419,72 @@ int ssh_run(session_t *s, const char *user, const char *host, int port)
     }
     memset(c, 0, sizeof *c);
     free(c);
-    return ret;
+    return NULL;
+}
+
+void sshc_close(sshc_t *c)
+{
+    if (!c)
+        return;
+    c->io.nonblock = false;
+    c->io.io_ms = 1500;
+    wolfSSH_shutdown(c->ssh);
+    wolfSSH_free(c->ssh);
+    wolfSSH_CTX_free(c->ctx);
+    close(c->io.fd);
+    memset(c, 0, sizeof *c);
+    free(c);
+}
+
+int sshc_read(sshc_t *c, uint8_t *buf, int cap, int timeout_ms, bool *is_stderr)
+{
+    c->io.nonblock = true;
+    for (int waited = 0;;) {
+        if (c->s->kick || c->s->closed)
+            return -1;
+        int n = sshio_read_ext(c->ssh, buf, cap, is_stderr);
+        if (n != 0)
+            return n;
+        if (waited >= timeout_ms)
+            return 0;
+        fd_set rd;
+        struct timeval tv = { 0, 250000 };
+        FD_ZERO(&rd);
+        FD_SET(c->io.fd, &rd);
+        select(c->io.fd + 1, &rd, NULL, NULL, &tv);
+        waited += 250;
+    }
+}
+
+int sshc_write(sshc_t *c, const void *data, int len)
+{
+    c->io.nonblock = true;
+    return sshio_write(c->ssh, &c->io, data, len);
+}
+
+int sshc_send_eof(sshc_t *c)
+{
+    return wolfSSH_stream_send_eof(c->ssh) == WS_SUCCESS ? 0 : -1;
+}
+
+int sshc_exit_status(sshc_t *c)
+{
+    return wolfSSH_GetExitStatus(c->ssh);
+}
+
+/* ---------------- entry point ---------------- */
+
+int ssh_run(session_t *s, const char *user, const char *host, int port)
+{
+    sshc_t *c = sshc_open(s, user, host, port, NULL);
+    if (!c)
+        return -1;
+    if (s->cols != 80 || s->rows != 24)
+        wolfSSH_ChangeTerminalSize(c->ssh, s->cols, s->rows, 0, 0);
+    s->winch = false;
+    bridge(c);
+    sshc_close(c);
+    if (!s->closed)
+        tn_printf(s, "\nConnection to %s closed.\n", host);
+    return 0;
 }

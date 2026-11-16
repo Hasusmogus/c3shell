@@ -6,3 +6,4 @@ third_party/
 sdkconfig
 sdkconfig.esp32-c3
 managed_components/
+test/__pycache__/

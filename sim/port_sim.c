@@ -21,6 +21,8 @@
 #include <unistd.h>
 #include "c3shell.h"
 
+void sim_lwip_start(void);
+
 #define NETS_MAX 16
 
 typedef struct {
@@ -484,6 +486,7 @@ int main(int argc, char **argv)
     load_nets();
     port_log("[sim] virtual ESP32-C3, state in %s/, %d simulated networks", state_dir, nnets);
     pthread_create(&th, NULL, console, NULL);
+    sim_lwip_start();      /* the VPN tunnel's TCP/IP stack (sim/vpn_proxy.c) */
     c3shell_main();
     return 0;
 }

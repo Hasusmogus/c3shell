@@ -21,10 +21,12 @@
 #include "esp_wifi.h"
 #include "esp_littlefs.h"
 #include "lwip/sockets.h"
+#include "lwip/netif.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
 #include "c3shell.h"
+#include "vpnif.h"
 
 static const char *TAG = C3_NAME;
 #define NVS_NS "c3shell"
@@ -377,4 +379,30 @@ void app_main(void)
     fs_mount();
     wifi_init();
     c3shell_main();
+}
+
+/* ---------------- VPN tunnel routing ---------------- */
+
+/* lwIP routes into the tunnel by itself: every socket here is an lwIP socket. */
+int port_vpn_dial(uint32_t ip_be, uint16_t port, int timeout_ms)
+{
+    (void)ip_be;
+    (void)port;
+    (void)timeout_ms;
+    return -2;
+}
+
+/* ESP-IDF's lwIP asks this hook for a route after matching its own interfaces'
+ * subnets (src == NULL), and for source-based routing (src set). The link
+ * option --wrap=ip4_route_src_hook (main/CMakeLists.txt) puts this in front:
+ * destinations the VPN pushed routes for go into the tunnel. */
+struct netif *__real_ip4_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest);
+struct netif *__wrap_ip4_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest)
+{
+    if (src == NULL) {
+        struct netif *n = vpnif_route(dest);
+        if (n)
+            return n;
+    }
+    return __real_ip4_route_src_hook(src, dest);
 }

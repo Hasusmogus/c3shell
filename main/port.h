@@ -32,6 +32,10 @@ long     port_stack_headroom(void);   /* bytes never used on the calling thread'
 void     port_device_id(char out[5]); /* 4 hex chars, unique per board */
 int      port_listen_port(void);      /* where the SSH server listens */
 bool     port_sock_via_ap(int fd);    /* did this client arrive over the setup network? */
+/* A TCP connection through the VPN tunnel as an ordinary socket fd. On the chip
+ * lwIP routes into the tunnel by itself, so this returns -2 ("use socket()");
+ * the simulator bridges to its own lwIP. -1 = failed. */
+int      port_vpn_dial(uint32_t ip_be, uint16_t port, int timeout_ms);
 
 /* ---- WiFi ---- */
 typedef struct {

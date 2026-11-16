@@ -3,7 +3,7 @@
 #define C3_CONFIG_H
 
 #define C3_NAME            "c3shell"
-#define C3_VERSION         "0.3"
+#define C3_VERSION         "0.4"
 
 /* Setup network hosted while the device has no WiFi to join.
  * SSID is this prefix + the last two MAC bytes, e.g. "c3shell-2D90".
@@ -33,5 +33,6 @@
 #define C3_VI_MAX          (32 * 1024) /* largest file vi will load */
 #define C3_SSH_CONNECT_MS  8000
 #define C3_SSH_IO_MS       20000
+#define C3_VPN_STACK       (20 * 1024) /* the OpenVPN protocol thread (TLS handshake) */
 
 #endif

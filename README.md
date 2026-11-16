@@ -12,6 +12,10 @@ An SSH jump shell for the ESP32-C3, written in C (ESP-IDF).
   setup network then disappears and the board lives on your network.
 - **Files on the device.** A small Unix-style file area with `ls`, `cd`,
   `mkdir`, `touch`, `rm`, `cp`, `mv`, `cat` and a built-in `vi`.
+- **scp and sftp.** Copy files onto the board from your PC with plain
+  `scp`/`sftp`, and between the board and other machines with its own `scp`.
+- **OpenVPN client.** `vpn up work.ovpn` puts the board on a remote network;
+  `ssh` and `scp` to addresses there then go through the tunnel.
 - **A virtual ESP32-C3** (`make run`) runs the same code on your PC so you can
   develop and test without flashing.
 
@@ -43,15 +47,28 @@ the outside world:
 pseudo-terminal, scripted, walks through first boot, the WiFi selector, WiFi
 loss and recovery, the wrong-password lockout, reboot, factory reset, and
 outbound SSH against both a mock server and a real OpenSSH `sshd` started on a
-spare local port. It needs `uv` (for the mock server's Python dependency) and
+spare local port. Real `scp` and `sftp` copy files in and out (both protocols,
+plus attempts to escape the file area), and the device's own `scp` runs
+against that `sshd`. It needs `uv` (for the mock server's Python dependency) and
 the usual `ssh`/`sshd`/`ssh-keygen` programs.
+
+The VPN part (`make test-vpn`, also run by `make test`) starts a real
+`openvpn` server and an `sshd` inside an unprivileged network namespace
+(`unshare --user --net`, no root needed), connects the simulator to it over
+UDP and TCP, with tls-crypt, tls-auth and no wrapping, certificates and
+username/password, and copies files through the tunnel; `sshd` must see them
+arrive from the device's tunnel address. It also waits through two key
+renegotiations and checks the refusals (wrong password, foreign CA, wrong
+server name). It is skipped when `openvpn` is not installed.
 
 ### What the simulator does and does not cover
 
 The simulator compiles everything in `main/*.c` unchanged: SSH server, line
-editor, shell, account store, network state machine, and the outbound SSH
-client, with the same wolfSSH/wolfCrypt sources and the same `config/user_settings.h`
-as the firmware. Session threads even get the firmware's stack size and report
+editor, shell, account store, network state machine, the outbound SSH
+client, file transfers and the OpenVPN client, with the same
+wolfSSH/wolfSSL sources and the same `config/user_settings.h` as the firmware.
+The VPN tunnel is an lwIP interface in both builds (the simulator brings its
+own copy of lwIP, the chip uses ESP-IDF's). Session threads even get the firmware's stack size and report
 how much of it they used.
 
 Only `port.h` is implemented differently (`sim/port_sim.c` instead of
@@ -87,6 +104,10 @@ retrying the saved network once a minute while nobody is logged in.
     wifi                      pick a WiFi network to join (scan + select)
     wifi forget               forget the saved network, host the setup network
     ssh [user@]host [-p port] open a shell on another machine
+    scp [-r] [-P port] from... to
+                              copy files to/from another machine
+    vpn up [file.ovpn]        connect to an OpenVPN server (default /vpn.ovpn)
+    vpn [status] | vpn down   show the tunnel / disconnect
     sshkey [new]              show (or regenerate) this device's public key
     hosts                     list remembered SSH host keys
     hosts forget <n|name>     forget one
@@ -122,6 +143,60 @@ flash driver refuses, at run time, any write to the bootloader, the partition
 table or the running firmware. Re-flashing still works over USB, which needs
 physical access to the board.
 
+### Copying files
+
+From your PC, the board is an ordinary scp/sftp server for its file area
+(log in with your account's password):
+
+    scp work.ovpn you@c3shell:/          # OpenSSH's default (SFTP) and scp -O both work
+    scp -r you@c3shell:/notes .
+    sftp you@c3shell                     # ls, get, put, mkdir, rename, rm ...
+
+Only the file area is reachable this way, exactly as with the file commands;
+running other commands over SSH (`ssh you@c3shell ls`) is refused.
+
+From the board's shell, `scp` copies between the file area and another
+machine, using the same logins, host-key checks and device key as `ssh`:
+
+    scp report.txt me@pc:Documents/      # upload (several files and -r work too)
+    scp me@pc:configs/work.ovpn .        # download
+    scp -P 2222 -r me@pc:project /src
+
+The other machine needs an `scp` program (any OpenSSH server has one).
+
+### VPN
+
+Copy the `.ovpn` file your VPN provider or administrator gave you onto the
+board (`scp work.ovpn you@c3shell:/vpn.ovpn`) and run `vpn up` (or
+`vpn up work.ovpn`). If the profile uses `auth-user-pass`, you are asked for
+the username and password; they are kept in memory only (or name a file in
+the file area with the two lines: `auth-user-pass creds.txt`). Then:
+
+    vpn                       state, server, tunnel address, routes, traffic
+    ssh me@10.0.5.20          reaches the remote network through the tunnel
+    vpn down
+
+The tunnel keeps running when you log out, renews its keys when the server
+asks, and reconnects by itself after an outage (going through the profile's
+`remote` lines in turn). It does not come back after a reboot until you run
+`vpn up` again. Only traffic to the networks the server pushes (`route`,
+the tunnel's own subnet, or everything with `redirect-gateway`) goes through
+the tunnel; the local WiFi network always stays local, and so does the VPN
+server itself. A pushed DNS server is used while the tunnel is up.
+
+What the client speaks: OpenVPN 2.x servers (tested against 2.7), `dev tun`,
+UDP or TCP over IPv4, certificates and/or `auth-user-pass` (including
+`auth-token`), TLS 1.2/1.3, `tls-auth` (`auth` SHA1/SHA256/SHA512) or
+`tls-crypt`, data ciphers AES-256-GCM and AES-128-GCM, `remote-cert-tls
+server`, `verify-x509-name ... name|name-prefix`, inline `<ca>`, `<cert>`,
+`<key>`, `<tls-auth>`, `<tls-crypt>` blocks or the same as separate files next
+to the profile. Not supported: `dev tap`, `tls-crypt-v2`, PKCS#12 files,
+passphrase-protected private keys, static-key (`secret`) mode, CBC ciphers
+(servers that offer nothing but `BF-CBC`/`AES-*-CBC` cannot be used),
+actual compression (the `compress`/`comp-lzo` "stub" framing is understood),
+and IPv6 inside the tunnel. Options the client does not use are listed when
+the tunnel starts.
+
 Outbound logins try the board's own Ed25519 key first (add the line printed
 by `sshkey` to `~/.ssh/authorized_keys` on a server for password-less login),
 then fall back to password or keyboard-interactive prompts. Host keys are
@@ -144,17 +219,29 @@ stuck outbound connection type `~.` at the start of a line; from OpenSSH type
   it: with the default, that first visitor could be anyone in radio range.
 - The account password is stored as a salted PBKDF2-SHA256 hash; the WiFi
   password, the board's SSH private keys and your files are stored in flash
-  unencrypted, so anyone holding the board can read them out over USB.
+  unencrypted, so anyone holding the board can read them out over USB. That
+  includes `.ovpn` profiles and the client keys inside them; VPN passwords
+  typed at `vpn up` are kept in memory only.
+- The board has no clock, so the VPN client cannot check certificate dates:
+  an expired (or not yet valid) server certificate is accepted as long as
+  your CA signed it, and revocation lists (`crl-verify`) are not consulted.
+  `verify-x509-name` pins the server's name.
+- Use `remote-cert-tls server` (most profiles have it): without it, any
+  client certificate from the same CA could pose as the server.
 
 ## Layout
 
     main/            portable application code + config.h (tunables)
-                     fs.c = file commands and path sandbox, vi.c = the editor
+                     fs.c = file commands and path sandbox, vi.c = the editor,
+                     xfer.c = scp/sftp, ovpn.c = OpenVPN client,
+                     vpnif.c = the tunnel as an lwIP interface
     main/esp/        ESP32-C3 backend (WiFi, NVS, app_main)
-    sim/             Linux backend: the virtual device
+    sim/             Linux backend: the virtual device (+ its lwIP settings and
+                     the bridge from host sockets into the tunnel)
     config/          wolfCrypt/wolfSSH build settings shared by both builds
     components/      ESP-IDF wrappers for the two libraries
-    third_party/     wolfSSL + wolfSSH checkouts (scripts/fetch-deps.sh)
+    third_party/     wolfSSL, wolfSSH and lwIP checkouts (scripts/fetch-deps.sh;
+                     lwIP is for the simulator only)
     test/            end-to-end tests
 
 ## License

@@ -81,6 +81,10 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  wifi forget               forget the saved network, host the setup network\n"
             "  ssh [user@]host [-p port] open a shell on another machine\n"
             "                            (hang up a stuck one with ~. on a new line; ~~. from OpenSSH)\n"
+            "  scp [-r] [-P port] from... to   copy files to/from another machine,\n"
+            "                            e.g. scp notes.txt me@pc:  or  scp me@pc:work.ovpn .\n"
+            "  vpn up [file.ovpn]        connect to an OpenVPN server (default /vpn.ovpn)\n"
+            "  vpn [status] | vpn down   show the tunnel / disconnect\n"
             "  sshkey [new]              show (or regenerate) this device's public key\n"
             "  hosts                     list remembered SSH host keys\n"
             "  hosts forget <n|name>     forget one\n"
@@ -121,6 +125,10 @@ static int cmd_status(session_t *s, int argc, char **argv)
         tn_puts(s, "Setup network: off\n");
     tn_printf(s, "Sessions:      %d of %d, you are %s from %s\n", server_session_count(), C3_MAX_SESSIONS,
               s->user, s->peer);
+    vpn_status_t vs;
+    vpn_status(&vs);
+    if (vs.running)
+        tn_printf(s, "VPN:           %s%s%s\n", vs.state, vs.ip[0] ? ", address " : "", vs.ip);
     if (port_free_heap() >= 0)
         tn_printf(s, "Memory:        %ld bytes free, session stack headroom %ld bytes\n", port_free_heap(),
                   port_stack_headroom());
@@ -291,6 +299,96 @@ static int cmd_ssh(session_t *s, int argc, char **argv)
     return s->closed ? CMD_EXIT : CMD_OK;
 }
 
+static void fmt_bytes(char *out, size_t cap, uint64_t n)
+{
+    if (n < 10 * 1024)
+        snprintf(out, cap, "%u B", (unsigned)n);
+    else if (n < 10 * 1024 * 1024)
+        snprintf(out, cap, "%u KB", (unsigned)(n / 1024));
+    else
+        snprintf(out, cap, "%u MB", (unsigned)(n / (1024 * 1024)));
+}
+
+static void vpn_show(session_t *s)
+{
+    vpn_status_t st;
+    char rx[16], tx[16];
+    vpn_status(&st);
+    if (!st.running && strcmp(st.state, "failed") != 0) {
+        tn_puts(s, "VPN: off\n");
+        return;
+    }
+    tn_printf(s, "VPN: %s for %us (%s)\n", st.state, (unsigned)st.since_s, st.file);
+    if (st.server[0])
+        tn_printf(s, "  server   %s\n", st.server);
+    if (st.ip[0]) {
+        fmt_bytes(rx, sizeof rx, st.rx);
+        fmt_bytes(tx, sizeof tx, st.tx);
+        tn_printf(s, "  address  %s, %d pushed route%s%s\n  traffic  %s in, %s out\n", st.ip, st.routes,
+                  st.routes == 1 ? "" : "s", st.redirect ? " + all other traffic" : "", rx, tx);
+    }
+    if (st.error[0] && strcmp(st.state, "connected") != 0)
+        tn_printf(s, "  %s     %s\n", strcmp(st.state, "failed") == 0 ? "error" : "last ", st.error);
+}
+
+static int cmd_vpn(session_t *s, int argc, char **argv)
+{
+    if (argc == 1 || (argc == 2 && strcmp(argv[1], "status") == 0)) {
+        vpn_show(s);
+        return CMD_OK;
+    }
+    if (argc == 2 && strcmp(argv[1], "down") == 0) {
+        vpn_status_t st;
+        vpn_status(&st);
+        if (!st.running) {
+            tn_puts(s, "The VPN is not running.\n");
+            return CMD_OK;
+        }
+        tn_puts(s, "Disconnecting ...\n");
+        vpn_stop();
+        tn_puts(s, "VPN off. Connections through it are closed.\n");
+        return CMD_OK;
+    }
+    if ((argc == 2 || argc == 3) && strcmp(argv[1], "up") == 0) {
+        if (vpn_start(s, argc == 3 ? argv[2] : "/vpn.ovpn") != 0)
+            return s->closed ? CMD_EXIT : CMD_OK;
+        /* follow the first attempt, so mistakes show up right here */
+        vpn_status_t st;
+        char last[24] = "";
+        for (int i = 0; i < 150; i++) {    /* 30 s */
+            vpn_status(&st);
+            if (strcmp(st.state, last) != 0) {
+                snprintf(last, sizeof last, "%s", st.state);
+                if (strcmp(st.state, "connecting") == 0 && st.server[0])
+                    tn_printf(s, "Connecting to %s ...\n", st.server);
+                else if (strcmp(st.state, "configuring") == 0)
+                    tn_puts(s, "Logged in, getting the network settings ...\n");
+            }
+            if (strcmp(st.state, "connected") == 0) {
+                tn_printf(s, "VPN up: this device is %s on the remote network. ssh and scp to its\n"
+                             "addresses now go through the tunnel. It reconnects by itself; 'vpn down' ends it.\n",
+                          st.ip);
+                return CMD_OK;
+            }
+            if (strcmp(st.state, "failed") == 0 || strcmp(st.state, "reconnecting") == 0 || !st.running) {
+                tn_printf(s, "VPN: %s\n", st.error[0] ? st.error : "stopped");
+                if (strcmp(st.state, "reconnecting") == 0)
+                    tn_puts(s, "Still trying in the background ('vpn' shows progress, 'vpn down' stops it).\n");
+                return CMD_OK;
+            }
+            if (tn_input_ready(s) && tn_getc(s, 0) == 3) {      /* Ctrl-C: stop watching */
+                tn_puts(s, "^C\nStill connecting in the background ('vpn' shows progress).\n");
+                return CMD_OK;
+            }
+            port_sleep_ms(200);
+        }
+        tn_puts(s, "Still connecting in the background ('vpn' shows progress).\n");
+        return CMD_OK;
+    }
+    tn_puts(s, "usage: vpn [status] | vpn up [file.ovpn] | vpn down\n");
+    return CMD_OK;
+}
+
 static int cmd_sshkey(session_t *s, int argc, char **argv)
 {
     char line[160];
@@ -378,6 +476,7 @@ static const struct {
 } commands[] = {
     { "help", cmd_help },     { "?", cmd_help },         { "wifi", cmd_wifi },
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
+    { "scp", cmd_scp },       { "vpn", cmd_vpn },
     { "status", cmd_status }, { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },

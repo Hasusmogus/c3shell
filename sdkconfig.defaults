@@ -12,3 +12,5 @@ CONFIG_LWIP_MAX_SOCKETS=10
 CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS=y
 # LittleFS: the vi/cp code writes whole files and renames them into place.
 CONFIG_LITTLEFS_USE_MTIME=n
+# OpenVPN over UDP: the server's tunnel packets can arrive as IP fragments.
+CONFIG_LWIP_IP4_REASSEMBLY=y

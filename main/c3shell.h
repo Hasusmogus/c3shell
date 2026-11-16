@@ -22,6 +22,7 @@ typedef struct {
 void sshio_attach(struct WOLFSSH *ssh, sshio_t *io);     /* use io for this connection */
 void sshio_ctx_setup(void *wolfssh_ctx);
 int  sshio_read(struct WOLFSSH *ssh, uint8_t *buf, int cap);   /* >0 bytes, 0 nothing yet, -1 over */
+int  sshio_read_ext(struct WOLFSSH *ssh, uint8_t *buf, int cap, bool *is_stderr);
 int  sshio_write(struct WOLFSSH *ssh, sshio_t *io, const uint8_t *data, int len);  /* 0 or -1 */
 
 /* ---------- terminal session ---------- */
@@ -92,6 +93,10 @@ int  cmd_mv(session_t *s, int argc, char **argv);
 int  cmd_df(session_t *s, int argc, char **argv);
 int  cmd_vi(session_t *s, int argc, char **argv);
 
+/* ---------- file transfers (xfer.c) ---------- */
+int  xfer_serve(session_t *s, bool subsystem, const char *command);  /* sftp / scp -t / scp -f; exit status */
+int  cmd_scp(session_t *s, int argc, char **argv);
+
 /* ---------- account ---------- */
 bool account_exists(void);
 int  account_create(const char *user, const char *pass);   /* 0, or -1 if one already exists */
@@ -117,6 +122,15 @@ void netmgr_forget(void);
 
 /* ---------- outbound ssh + stored keys ---------- */
 int  ssh_run(session_t *s, const char *user, const char *host, int port);
+typedef struct sshc sshc_t;
+/* An authenticated connection running cmd on the far end (NULL = a terminal shell).
+ * Prompts, host-key questions and errors go to the user's session. */
+sshc_t *sshc_open(session_t *s, const char *user, const char *host, int port, const char *cmd);
+int  sshc_read(sshc_t *c, uint8_t *buf, int cap, int timeout_ms, bool *is_stderr); /* >0, 0 timeout, -1 closed */
+int  sshc_write(sshc_t *c, const void *data, int len);                             /* 0 or -1 */
+int  sshc_send_eof(sshc_t *c);
+int  sshc_exit_status(sshc_t *c);
+void sshc_close(sshc_t *c);
 int  sshstore_pubkey_line(char *out, size_t cap, bool regen);          /* device identity (outbound logins) */
 int  sshstore_identity(uint8_t *der, size_t dercap, uint8_t pub[32]);  /* DER length or -1 */
 int  sshstore_hostkey(uint8_t *der, size_t dercap, char *fp, size_t fpcap); /* this device's server key */
@@ -126,5 +140,42 @@ void sshstore_host_add(const char *name, const uint8_t fp[32]);
 int  sshstore_host_list(session_t *s);
 bool sshstore_host_forget(const char *name_or_index);
 void sshstore_fp_text(const uint8_t fp[32], char *out, size_t cap);
+
+/* ---------- OpenVPN client (ovpn.c) and its tunnel interface (vpnif.c) ---------- */
+#define VPN_MTU    1400   /* inner packets; keeps the encrypted ones under a WiFi frame */
+#define VPN_ROUTES 16
+
+typedef struct {
+    bool     running;
+    char     state[24];      /* off, connecting, configuring, connected, reconnecting, failed */
+    char     error[160];     /* why the last attempt ended */
+    char     ip[20], server[80], file[C3_PATH_MAX];
+    uint32_t since_s;
+    int      routes;
+    bool     redirect;
+    uint64_t rx, tx;
+} vpn_status_t;
+
+int  vpn_start(session_t *s, const char *ovpn_path);   /* parse, ask for credentials, start in the background */
+void vpn_stop(void);
+void vpn_status(vpn_status_t *st);
+
+/* addresses in network byte order */
+typedef struct {
+    uint32_t ip, mask, peer;  /* peer: the far end of a point-to-point link (net30), else 0 */
+    uint32_t server;          /* the VPN server: never routed into the tunnel */
+    struct { uint32_t net, mask; } routes[VPN_ROUTES];
+    int      nroutes;
+    bool     redirect;        /* redirect-gateway: everything not local goes into the tunnel */
+    uint32_t dns;
+} vpnif_cfg_t;
+
+int  vpnif_up(const vpnif_cfg_t *c, void (*out)(const uint8_t *pkt, size_t len));
+void vpnif_down(void);
+void vpnif_input(const uint8_t *pkt, size_t len);
+bool vpn_routes_ip(uint32_t ip_be);
+/* fd connected to ip:port through the VPN's own TCP/IP stack (simulator only),
+ * -2 when the destination is not for that stack (use an ordinary socket), -1 on failure */
+int  vpn_dial(uint32_t ip_be, uint16_t port, int timeout_ms);
 
 #endif

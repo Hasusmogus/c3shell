@@ -256,7 +256,7 @@ def t_second_conn(c):
     tc = sim.connect("admin", command="status")   # running a command instead of a shell
     tc.expect("password: ")
     tc.line("secret-123")
-    tc.expect("interactive logins only")
+    tc.expect("only interactive logins, scp and sftp")
     tc.expect_closed()
 
 
@@ -737,6 +737,107 @@ def t_vi(c):
     t.expect(PROMPT)
     t.line("rm big.txt huge.txt")
     t.expect(PROMPT)
+
+
+def _pc_tools(c):
+    """scp/sftp from 'a PC' (this machine) into the device, logging in by password."""
+    sim, d = c["sim"], c["tmp"]
+    ap = os.path.join(d, "askpass")
+    with open(ap, "w") as f:
+        f.write("#!/bin/sh\necho secret-123\n")
+    os.chmod(ap, 0o755)
+    env = dict(os.environ, SSH_ASKPASS=ap, SSH_ASKPASS_REQUIRE="force", DISPLAY="none")
+    opts = ["-F", "/dev/null", "-o", f"UserKnownHostsFile={sim.known_hosts}", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "PubkeyAuthentication=no", "-o", "LogLevel=ERROR", "-P", str(sim.port)]
+
+    def run(prog, *args, stdin=None):
+        o = [x if not (prog == "ssh" and x == "-P") else "-p" for x in opts]
+        r = subprocess.run([prog, *o, *args], env=env, input=stdin, capture_output=True, text=True, timeout=120)
+        return r.returncode, r.stdout + r.stderr
+    return run
+
+
+@step("files: scp and sftp from a PC (SFTP and classic scp), sandboxed")
+def t_xfer_in(c):
+    t, d = c["t"], c["tmp"]
+    run = _pc_tools(c)
+    blob = os.urandom(300_000)
+    with open(f"{d}/blob.bin", "wb") as f:
+        f.write(blob)
+    os.makedirs(f"{d}/tree/sub", exist_ok=True)
+    for name, text in (("tree/a.txt", "alpha\n"), ("tree/sub/b.txt", "beta\n")):
+        with open(f"{d}/{name}", "w") as f:
+            f.write(text)
+    rc, out = run("scp", f"{d}/blob.bin", "admin@127.0.0.1:/")                     # SFTP (OpenSSH default)
+    assert rc == 0, out
+    rc, out = run("scp", "-O", f"{d}/blob.bin", "admin@127.0.0.1:/classic.bin")    # classic scp protocol
+    assert rc == 0, out
+    rc, out = run("scp", "-r", f"{d}/tree", "admin@127.0.0.1:/")
+    assert rc == 0, out
+    rc, out = run("scp", "admin@127.0.0.1:/classic.bin", f"{d}/back1")
+    assert rc == 0, out
+    rc, out = run("scp", "-O", "-r", "admin@127.0.0.1:/tree", f"{d}/tree2")
+    assert rc == 0, out
+    assert open(f"{d}/back1", "rb").read() == blob, "download corrupted"
+    assert open(f"{d}/tree2/sub/b.txt").read() == "beta\n"
+    t.line("ls -l / tree/sub")
+    out = t.expect(PROMPT)
+    assert re.search(r"300000\s+blob\.bin", out) and "classic.bin" in out and "b.txt" in out, out
+    rc, out = run("sftp", "admin@127.0.0.1", stdin="ls -l /\nmkdir /d\nrename /blob.bin /d/x.bin\nls /d\n"
+                  "get /../../../etc/hostname " + d + "/escaped\nrm /d/x.bin\nrmdir /d\n")
+    assert rc == 0, out
+    assert "/d/x.bin" in out and "classic.bin" in out, out
+    assert "not found" in out and not os.path.exists(f"{d}/escaped"), out
+    rc, out = run("scp", "-O", "admin@127.0.0.1:/../../../etc/hostname", f"{d}/escaped2")
+    assert rc != 0 and not os.path.exists(f"{d}/escaped2"), out
+    rc, out = run("ssh", "admin@127.0.0.1", "ls")                                    # no shell commands
+    assert rc != 0 and "only interactive logins" in out, out
+    t.line("rm -r tree classic.bin")
+    t.expect(PROMPT)
+
+
+@step("scp command: upload and download against a real OpenSSH sshd, through the device")
+def t_xfer_out(c):
+    t, d = c["t"], c["tmp"]
+    sshd = shutil.which("sshd") or "/usr/sbin/sshd"
+    if not os.path.exists(sshd):
+        return "skipped (no sshd binary)"
+    port = free_port()
+    with open(f"{d}/sshd_scp_config", "w") as f:
+        f.write(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {d}/hostkey\nPidFile {d}/sshd2.pid\n"
+                f"AuthorizedKeysFile {c['ak']}\nStrictModes no\nUsePAM no\nPasswordAuthentication no\n"
+                "KbdInteractiveAuthentication no\nLogLevel ERROR\n")
+    proc = subprocess.Popen([sshd, "-D", "-e", "-f", f"{d}/sshd_scp_config"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    c["procs"].append(proc)
+    for _ in range(50):
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+            break
+        except OSError:
+            time.sleep(0.1)
+    me = getpass.getuser()
+    blob = open(f"{d}/blob.bin", "rb").read()
+    rc, out = _pc_tools(c)("scp", f"{d}/blob.bin", "admin@127.0.0.1:/")
+    assert rc == 0, out
+    t.line(f"scp -P {port} blob.bin {me}@127.0.0.1:{d}/landed.bin")
+    t.expect(r"\(yes/no\)\? ")
+    t.line("yes")
+    out = t.expect(PROMPT, timeout=60)
+    assert "100%" in out and open(f"{d}/landed.bin", "rb").read() == blob, out
+    t.line(f"scp -P {port} -r {me}@127.0.0.1:{d}/tree fetched")
+    out = t.expect(PROMPT, timeout=60)
+    t.line("cat fetched/sub/b.txt")
+    out = t.expect(PROMPT)
+    assert "beta" in out, out
+    t.line(f"scp -P {port} {me}@127.0.0.1:{d}/no-such-file .")
+    out = t.expect(PROMPT, timeout=30)
+    assert "No such file" in out, out
+    t.line("scp blob.bin")
+    out = t.expect(PROMPT)
+    assert "usage: scp" in out, out
+    t.line("rm -r fetched blob.bin")
+    t.expect(PROMPT)
+    proc.terminate()
 
 
 @step("repeated wrong passwords get the address blocked for a while")

@@ -10,8 +10,7 @@
 #undef WOLFSSL_ESPIDF
 #undef PLATFORMIO
 
-/* ---- wolfCrypt: only the primitives an SSH client needs ---- */
-#define WOLFCRYPT_ONLY
+/* ---- wolfCrypt: the primitives SSH and the OpenVPN client need ---- */
 #define WOLFSSL_WOLFSSH
 #define WOLFSSL_PUBLIC_MP
 #define SINGLE_THREADED          /* every SSH session owns all of its crypto state */
@@ -26,7 +25,6 @@
 #define NO_DSA
 #define NO_RC4
 #define NO_MD4
-#define NO_MD5
 #define NO_DES3
 #define NO_PSK
 #define NO_OLD_TLS
@@ -56,6 +54,21 @@
 #define HAVE_HASHDRBG
 #define WOLFSSL_BASE64_ENCODE
 #define HAVE_PBKDF2
+
+/* ---- TLS client, for the OpenVPN control channel (ovpn.c) ---- */
+#define NO_WOLFSSL_SERVER        /* the SSH server is wolfSSH; TLS is only ever a client */
+#define WOLFSSL_USER_IO          /* TLS records travel inside OpenVPN control packets */
+#define WOLFSSL_TLS13
+#define HAVE_TLS_EXTENSIONS
+#define HAVE_SUPPORTED_CURVES
+#define HAVE_EXTENDED_MASTER
+#define HAVE_HKDF
+#define WC_RSA_PSS
+#define HAVE_KEYING_MATERIAL     /* RFC 5705 exporter: OpenVPN's "tls-ekm" data-channel keys */
+#define WOLFSSL_ALWAYS_VERIFY_CB /* remote-cert-tls server looks at the peer's certificate */
+#define NO_SESSION_CACHE
+/* MD5 stays in for OpenVPN's original key derivation (TLS 1.0 PRF) used by
+ * servers older than 2.6; TLS itself is limited to 1.2 and 1.3. */
 
 /* Entropy comes from the platform layer: the hardware RNG on the chip,
  * /dev/urandom in the simulator (see port_random()). */

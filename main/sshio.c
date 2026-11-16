@@ -78,17 +78,28 @@ static bool soft(int e)
            e == WS_WINDOW_FULL;
 }
 
-/* Non-blocking read of channel data (io->nonblock must be set). */
+/* Non-blocking read of channel data (io->nonblock must be set). The peer's
+ * stderr stream is mixed in, or flagged through is_stderr when that is given. */
 int sshio_read(WOLFSSH *ssh, uint8_t *buf, int cap)
 {
+    return sshio_read_ext(ssh, buf, cap, NULL);
+}
+
+int sshio_read_ext(WOLFSSH *ssh, uint8_t *buf, int cap, bool *is_stderr)
+{
+    if (is_stderr)
+        *is_stderr = false;
     for (int guard = 0; guard < 16; guard++) {
         int n = wolfSSH_stream_read(ssh, buf, (word32)cap);
         if (n > 0)
             return n;
         if (n == WS_EXTDATA) {                      /* the peer's stderr stream */
             n = wolfSSH_extended_data_read(ssh, buf, (word32)cap);
-            if (n > 0)
+            if (n > 0) {
+                if (is_stderr)
+                    *is_stderr = true;
                 return n;
+            }
             continue;
         }
         if (n == WS_EOF)
