@@ -127,5 +127,15 @@ stuck outbound connection type `~.` at the start of a line; from OpenSSH type
     third_party/     wolfSSL + wolfSSH checkouts (scripts/fetch-deps.sh)
     test/            end-to-end tests
 
-wolfSSL and wolfSSH are GPL-3.0 licensed, which matters if you distribute
-firmware built from this.
+## License
+
+Copyright (C) 2026 Hasusmogus
+
+c3shell is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See [LICENSE](LICENSE).
+
+The firmware links wolfSSL and wolfSSH, which are themselves GPL-3.0-or-later,
+so anyone who distributes a built firmware image must also offer its source
+under the same terms.
