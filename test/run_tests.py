@@ -281,6 +281,12 @@ def t_shell(c):
     t.expect(PROMPT)
     t.send("half a line\x03")              # Ctrl-C
     t.expect(PROMPT)
+    t.line("fetch")
+    out = t.expect(PROMPT)
+    assert "admin" in out and "c3shell 0.4" in out and "virtual ESP32-C3" in out and "\x1b[47m" in out, out
+    t.line("fetch --plain")
+    out = t.expect(PROMPT)
+    assert "Host" in out and "hosting c3shell-51M0" in out and "Disk (/)" in out and "\x1b[" not in out, out
 
 
 @step("wifi selector: scan, wrong password, cancel")

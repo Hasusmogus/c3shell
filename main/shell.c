@@ -94,6 +94,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  cat file   cp from to   mv from to             df (space left)\n"
             "  vi [file]                 edit a file (:wq saves and quits, :q! discards)\n"
             "  status                    network, sessions, memory\n"
+            "  fetch [--plain]           system summary with a logo, fastfetch-style\n"
             "  passwd                    change your password\n"
             "  reboot                    restart the device\n"
             "  factory-reset             erase account, WiFi, SSH data and all files\n"
@@ -132,6 +133,96 @@ static int cmd_status(session_t *s, int argc, char **argv)
     if (port_free_heap() >= 0)
         tn_printf(s, "Memory:        %ld bytes free, session stack headroom %ld bytes\n", port_free_heap(),
                   port_stack_headroom());
+    return CMD_OK;
+}
+
+/* fastfetch-style summary: a chip on the left, facts on the right */
+static int cmd_fetch(session_t *s, int argc, char **argv)
+{
+    static const char *const logo[] = {
+        "     | | | | | |     ",
+        "   .-+-+-+-+-+-+-.   ",
+        " --|             |-- ",
+        " --|   ESP32     |-- ",
+        " --|      -C3    |-- ",
+        " --|             |-- ",
+        "   '-+-+-+-+-+-+-'   ",
+        "     | | | | | |     ",
+    };
+    enum { NLOGO = sizeof logo / sizeof logo[0], NINFO = 16 };
+    bool color = !(argc > 1 && strcmp(argv[1], "--plain") == 0);
+    const char *c1 = color ? "\033[1;36m" : "", *c0 = color ? "\033[0m" : "";
+    char info[NINFO][112], id[5];
+    int n = 0;
+    net_status_t st;
+    vpn_status_t vs;
+    port_sysinfo_t si;
+    uint32_t up = port_uptime_s();
+    long total, used, heap = port_free_heap();
+
+    if (argc > 1 && color) {
+        tn_puts(s, "usage: fetch [--plain]\n");
+        return CMD_OK;
+    }
+    port_device_id(id);
+    port_sysinfo(&si);
+    netmgr_status(&st);
+    vpn_status(&vs);
+
+#define ADD(label, ...)                                                                       \
+    do {                                                                                      \
+        int k_ = snprintf(info[n], sizeof info[n], "%s%-9s%s ", c1, label, c0);               \
+        snprintf(info[n] + k_, sizeof info[n] - (size_t)k_, __VA_ARGS__);                     \
+        n++;                                                                                  \
+    } while (0)
+
+    snprintf(info[n++], sizeof info[0], "%s%s%s@%s%s-%s%s", c1, s->user, c0, c1, C3_NAME, id, c0);
+    snprintf(info[n++], sizeof info[0], "%.*s", (int)(strlen(s->user) + strlen(C3_NAME) + 6),
+             "----------------------------------------------------------------");
+    ADD("OS", "%s %s", C3_NAME, C3_VERSION);
+    ADD("Host", "%s", si.host);
+    ADD("CPU", "%s", si.cpu);
+    if (up >= 86400)
+        ADD("Uptime", "%ud %uh %um", (unsigned)(up / 86400), (unsigned)(up / 3600 % 24), (unsigned)(up / 60 % 60));
+    else if (up >= 3600)
+        ADD("Uptime", "%uh %um", (unsigned)(up / 3600), (unsigned)(up / 60 % 60));
+    else
+        ADD("Uptime", "%um %us", (unsigned)(up / 60), (unsigned)(up % 60));
+    ADD("Shell", "%s sh", C3_NAME);
+    ADD("Terminal", "%ux%u, from %s", (unsigned)s->cols, (unsigned)s->rows, s->peer);
+    if (heap >= 0 && si.heap_total > 0)
+        ADD("Memory", "%ld KB / %ld KB (%ld%%)", (si.heap_total - heap) / 1024, si.heap_total / 1024,
+            (si.heap_total - heap) * 100 / si.heap_total);
+    else if (heap >= 0)
+        ADD("Memory", "%ld KB free", heap / 1024);
+    if (si.flash_kb > 0)
+        ADD("Flash", "%ld MB", si.flash_kb / 1024);
+    if (port_fs_usage(&total, &used) == 0 && total > 0)
+        ADD("Disk (/)", "%ld KB / %ld KB (%ld%%)", used / 1024, total / 1024, used * 100 / total);
+    if (st.sta_up)
+        ADD("WiFi", "%s (%s, %d dBm)", st.sta_ssid, st.sta_ip, st.rssi);
+    else if (st.ap_up)
+        ADD("WiFi", "hosting %s (%s)", st.ap_ssid, st.ap_ip);
+    if (vs.running)
+        ADD("VPN", "%s%s%s", vs.state, vs.ip[0] ? ", " : "", vs.ip);
+    ADD("Sessions", "%d of %d", server_session_count(), C3_MAX_SESSIONS);
+#undef ADD
+
+    tn_puts(s, "\n");
+    for (int i = 0; i < (n > NLOGO ? n : NLOGO) + (color ? 2 : 0); i++) {
+        int row = i - 1;                       /* logo starts one line down, beside the title rule */
+        const char *art = row >= 0 && row < NLOGO ? logo[row] : "                     ";
+        tn_printf(s, "%s%s%s  ", c1, art, c0);
+        if (i < n) {
+            tn_puts(s, info[i]);
+        } else if (color && i == n + 1) {      /* palette strip, as fastfetch/neofetch do */
+            for (int c = 0; c < 8; c++)
+                tn_printf(s, "\033[4%dm   ", c);
+            tn_puts(s, "\033[0m");
+        }
+        tn_puts(s, "\n");
+    }
+    tn_puts(s, "\n");
     return CMD_OK;
 }
 
@@ -477,7 +568,8 @@ static const struct {
     { "help", cmd_help },     { "?", cmd_help },         { "wifi", cmd_wifi },
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
     { "scp", cmd_scp },       { "vpn", cmd_vpn },
-    { "status", cmd_status }, { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
+    { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
+    { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },
     { "mkdir", cmd_mkdir },   { "rmdir", cmd_rmdir },    { "rm", cmd_rm },

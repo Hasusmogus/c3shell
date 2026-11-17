@@ -117,6 +117,7 @@ retrying the saved network once a minute while nobody is logged in.
     cat file   cp from to   mv from to                df (space left)
     vi [file]                 edit a file
     status                    network, sessions, memory
+    fetch [--plain]           system summary with a logo, fastfetch-style
     passwd                    change your password
     reboot                    restart the device
     factory-reset             erase account, WiFi, SSH data and all files

@@ -10,12 +10,16 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
+#include "esp_chip_info.h"
 #include "esp_event.h"
+#include "esp_flash.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_pthread.h"
 #include "esp_random.h"
+#include "esp_rom_sys.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -118,6 +122,18 @@ void port_random(void *buf, size_t len) { esp_fill_random(buf, len); }
 long port_free_heap(void) { return (long)esp_get_free_heap_size(); }
 long port_stack_headroom(void) { return (long)uxTaskGetStackHighWaterMark(NULL); }
 int  port_listen_port(void) { return 22; }
+
+void port_sysinfo(port_sysinfo_t *o)
+{
+    esp_chip_info_t ci;
+    uint32_t flash = 0;
+    esp_chip_info(&ci);
+    snprintf(o->host, sizeof o->host, "ESP32-C3 rev v%d.%d", ci.revision / 100, ci.revision % 100);
+    snprintf(o->cpu, sizeof o->cpu, "RISC-V, %d core%s @ %u MHz", ci.cores, ci.cores == 1 ? "" : "s",
+             (unsigned)esp_rom_get_cpu_ticks_per_us());
+    o->flash_kb = esp_flash_get_size(NULL, &flash) == ESP_OK ? (long)(flash / 1024) : -1;
+    o->heap_total = (long)heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
+}
 
 void port_reboot(void)
 {

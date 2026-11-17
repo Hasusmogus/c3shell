@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 #include "c3shell.h"
@@ -59,6 +60,31 @@ void port_sleep_ms(uint32_t ms) { usleep(ms * 1000u); }
 long port_free_heap(void) { return -1; }
 int  port_listen_port(void) { return listen_port; }
 void port_device_id(char out[5]) { memcpy(out, "51M0", 5); }
+
+void port_sysinfo(port_sysinfo_t *o)
+{
+    struct utsname u;
+    char line[256], model[80] = "unknown CPU";
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    while (f && fgets(line, sizeof line, f)) {
+        char *v = strchr(line, ':');
+        if (v && strncmp(line, "model name", 10) == 0) {
+            snprintf(model, sizeof model, "%s", v + 2);
+            model[strcspn(model, "\n")] = 0;
+            break;
+        }
+    }
+    if (f)
+        fclose(f);
+    if (uname(&u) == 0)
+        snprintf(o->host, sizeof o->host, "virtual ESP32-C3 (%.20s %.20s)", u.sysname, u.machine);
+    else
+        snprintf(o->host, sizeof o->host, "virtual ESP32-C3");
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    snprintf(o->cpu, sizeof o->cpu, "%s (%ld thread%s, host)", model, n, n == 1 ? "" : "s");
+    o->flash_kb = -1;
+    o->heap_total = -1;
+}
 
 void port_log(const char *fmt, ...)
 {
