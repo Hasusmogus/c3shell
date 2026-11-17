@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <time.h>
@@ -61,10 +62,59 @@ long port_free_heap(void) { return -1; }
 int  port_listen_port(void) { return listen_port; }
 void port_device_id(char out[5]) { memcpy(out, "51M0", 5); }
 
+/* The simulator's threads, from /proc: CPU time is real host CPU time. */
+int port_tasks(port_task_t *out, int max, uint32_t *now_us)
+{
+    DIR *d = opendir("/proc/self/task");
+    struct dirent *e;
+    long hz = sysconf(_SC_CLK_TCK);
+    struct timespec ts;
+    int k = 0;
+    if (!d)
+        return -1;
+    while ((e = readdir(d)) && k < max) {
+        char path[300], buf[512];
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof path, "/proc/self/task/%s/stat", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f)
+            continue;
+        size_t n = fread(buf, 1, sizeof buf - 1, f);
+        fclose(f);
+        buf[n] = 0;
+        char *l = strchr(buf, '('), *r = strrchr(buf, ')');
+        char st = '?';
+        unsigned long ut = 0, sy = 0;
+        long prio = 0;
+        if (!l || !r || r < l)
+            continue;
+        if (sscanf(r + 2, "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu %*d %*d %ld", &st, &ut, &sy,
+                   &prio) < 3)
+            continue;
+        port_task_t *t = &out[k++];
+        snprintf(t->name, sizeof t->name, "%.*s", (int)(r - l - 1), l + 1);
+        t->state = st == 'D' ? 'S' : st;
+        t->prio = (uint8_t)(prio < 0 ? 0 : prio > 255 ? 255 : prio);
+        t->id = (uint32_t)atol(e->d_name);
+        t->runtime = (uint32_t)((uint64_t)(ut + sy) * 1000000u / (uint64_t)hz);
+        t->stack_free = -1;
+    }
+    closedir(d);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    *now_us = (uint32_t)((uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u);
+    return k;
+}
+
+void port_heap(long *free_now, long *min_free, long *largest)
+{
+    *free_now = *min_free = *largest = -1;
+}
+
 void port_sysinfo(port_sysinfo_t *o)
 {
     struct utsname u;
-    char line[256], model[80] = "unknown CPU";
+    char line[256], model[64] = "unknown CPU";
     FILE *f = fopen("/proc/cpuinfo", "r");
     while (f && fgets(line, sizeof line, f)) {
         char *v = strchr(line, ':');
@@ -123,7 +173,7 @@ void port_reboot(void)
  * size is enough here it is comfortably enough on the chip. Use --big-stacks
  * if you ever need to take the stack size out of the picture. */
 #define STACK_GUARD (64 * 1024)
-struct tramp { void (*fn)(void *); void *arg; uint8_t *stack; size_t size; };
+struct tramp { void (*fn)(void *); void *arg; uint8_t *stack; size_t size; char name[16]; };
 static __thread struct tramp *self;
 static bool big_stacks;
 
@@ -140,6 +190,7 @@ long port_stack_headroom(void)
 static void *trampoline(void *p)
 {
     self = p;
+    prctl(PR_SET_NAME, self->name);         /* so 'top' can tell the threads apart */
     self->fn(self->arg);
     return NULL;            /* stack and descriptor are leaked: fine for a test tool */
 }
@@ -149,9 +200,9 @@ int port_thread_start(const char *name, size_t stack, void (*fn)(void *), void *
     pthread_t th;
     pthread_attr_t at;
     struct tramp *t = malloc(sizeof *t);
-    (void)name;
     if (!t)
         return -1;
+    snprintf(t->name, sizeof t->name, "%s", name);
     t->fn = fn;
     t->arg = arg;
     if (big_stacks)

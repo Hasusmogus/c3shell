@@ -38,6 +38,18 @@ typedef struct {
     long heap_total;                  /* bytes, -1 if unknown */
 } port_sysinfo_t;
 void     port_sysinfo(port_sysinfo_t *out);  /* for 'fetch' */
+
+/* ---- what 'top' shows ---- */
+typedef struct {
+    char     name[16];
+    char     state;                   /* like ps: R runnable, S sleeping/waiting, other letters rare */
+    uint8_t  prio;
+    uint32_t id;                      /* stable while the task lives */
+    uint32_t runtime;                 /* CPU time used so far, microseconds, wraps; 0 = not measured */
+    long     stack_free;              /* bytes of stack never used, -1 if unknown */
+} port_task_t;
+int  port_tasks(port_task_t *out, int max, uint32_t *now_us); /* count or -1; now_us on runtime's clock */
+void port_heap(long *free_now, long *min_free, long *largest); /* bytes, -1 where unknown */
 bool     port_sock_via_ap(int fd);    /* did this client arrive over the setup network? */
 /* A TCP connection through the VPN tunnel as an ordinary socket fd. On the chip
  * lwIP routes into the tunnel by itself, so this returns -2 ("use socket()");

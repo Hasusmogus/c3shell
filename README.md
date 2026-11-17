@@ -118,6 +118,7 @@ retrying the saved network once a minute while nobody is logged in.
     vi [file]                 edit a file
     status                    network, sessions, memory
     fetch [--plain]           system summary with a logo, fastfetch-style
+    top [-d secs]             live view of tasks, CPU, memory, sessions (q quits)
     passwd                    change your password
     reboot                    restart the device
     factory-reset             erase account, WiFi, SSH data and all files

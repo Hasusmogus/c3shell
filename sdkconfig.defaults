@@ -14,3 +14,6 @@ CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS=y
 CONFIG_LITTLEFS_USE_MTIME=n
 # OpenVPN over UDP: the server's tunnel packets can arrive as IP fragments.
 CONFIG_LWIP_IP4_REASSEMBLY=y
+# 'top': per-task CPU time and stack use (FreeRTOS run-time stats, esp_timer clock).
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

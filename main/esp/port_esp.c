@@ -123,6 +123,57 @@ long port_free_heap(void) { return (long)esp_get_free_heap_size(); }
 long port_stack_headroom(void) { return (long)uxTaskGetStackHighWaterMark(NULL); }
 int  port_listen_port(void) { return 22; }
 
+int port_tasks(port_task_t *out, int max, uint32_t *now_us)
+{
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+    UBaseType_t cap = uxTaskGetNumberOfTasks() + 4;
+    TaskStatus_t *ts = malloc(cap * sizeof *ts);
+    configRUN_TIME_COUNTER_TYPE total = 0;
+    if (!ts)
+        return -1;
+    UBaseType_t n = uxTaskGetSystemState(ts, cap, &total);
+    int k = 0;
+    for (UBaseType_t i = 0; i < n && k < max; i++, k++) {
+        port_task_t *t = &out[k];
+        snprintf(t->name, sizeof t->name, "%s", ts[i].pcTaskName);
+        /* FreeRTOS reports a task waiting without a timeout as "suspended" */
+        switch (ts[i].eCurrentState) {
+        case eRunning: case eReady:     t->state = 'R'; break;
+        case eBlocked: case eSuspended: t->state = 'S'; break;
+        case eDeleted:                  t->state = 'Z'; break;
+        default:                        t->state = '?'; break;
+        }
+        t->prio = (uint8_t)ts[i].uxCurrentPriority;
+        t->id = (uint32_t)ts[i].xTaskNumber;
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+        t->runtime = (uint32_t)ts[i].ulRunTimeCounter;
+#else
+        t->runtime = 0;
+#endif
+        t->stack_free = (long)ts[i].usStackHighWaterMark;   /* bytes: ESP-IDF stacks count in bytes */
+    }
+    free(ts);
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    *now_us = (uint32_t)total;          /* the run-time clock is esp_timer, in microseconds */
+#else
+    *now_us = (uint32_t)esp_timer_get_time();
+#endif
+    return k;
+#else
+    (void)out;
+    (void)max;
+    (void)now_us;
+    return -1;
+#endif
+}
+
+void port_heap(long *free_now, long *min_free, long *largest)
+{
+    *free_now = (long)heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    *min_free = (long)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
+    *largest = (long)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+}
+
 void port_sysinfo(port_sysinfo_t *o)
 {
     esp_chip_info_t ci;

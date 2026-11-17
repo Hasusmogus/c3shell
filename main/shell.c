@@ -95,6 +95,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  vi [file]                 edit a file (:wq saves and quits, :q! discards)\n"
             "  status                    network, sessions, memory\n"
             "  fetch [--plain]           system summary with a logo, fastfetch-style\n"
+            "  top [-d secs]             live view of tasks, CPU, memory, sessions (q quits)\n"
             "  passwd                    change your password\n"
             "  reboot                    restart the device\n"
             "  factory-reset             erase account, WiFi, SSH data and all files\n"
@@ -570,6 +571,7 @@ static const struct {
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
     { "scp", cmd_scp },       { "vpn", cmd_vpn },
     { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
+    { "top", cmd_top },       { "htop", cmd_top },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },
@@ -628,8 +630,12 @@ static int run_line(session_t *s, char *line)
     if (argc == 0)
         return CMD_OK;
     for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
-        if (strcmp(argv[0], commands[i].name) == 0)
-            return commands[i].fn(s, argc, argv);
+        if (strcmp(argv[0], commands[i].name) == 0) {
+            snprintf(s->doing, sizeof s->doing, "%s", argv[0]);
+            int r = commands[i].fn(s, argc, argv);
+            s->doing[0] = 0;
+            return r;
+        }
     tn_printf(s, "%s: unknown command - type 'help'\n", argv[0]);
     return CMD_OK;
 }
@@ -644,8 +650,10 @@ void session_main(session_t *s)
 
     /* The SSH layer already checked the password - unless there was no
      * account to check against, in which case one has to be created now. */
+    snprintf(s->doing, sizeof s->doing, "%s", s->setup ? "setup" : "");
     if (s->setup && first_boot_setup(s) != 0)
         return;
+    s->doing[0] = 0;
     port_log("session %d: %s logged in", s->id, s->user);
 
     netmgr_status(&st);

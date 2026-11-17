@@ -57,6 +57,9 @@ typedef struct session {
     char     cwd[C3_PATH_MAX];   /* in the file area */
     char     hist[HIST_N][LINE_MAX_];
     int      hist_n;
+    /* shown by 'top' */
+    uint32_t since_s;        /* uptime when the connection arrived */
+    char     doing[16];      /* "login", the running command, "" at the prompt */
 } session_t;
 
 int  tn_getc(session_t *s, int timeout_ms);
@@ -72,6 +75,14 @@ bool tn_confirm(session_t *s, const char *question);       /* requires typing "y
 extern int guard_block_s;
 void c3shell_main(void);               /* start everything; never returns */
 int  server_session_count(void);
+typedef struct {
+    int      id;
+    bool     via_ap;
+    uint32_t since_s;
+    char     user[32], peer[24], doing[16];
+} sess_info_t;
+int  server_sessions(sess_info_t *out, int max);   /* snapshot of the session table */
+int  cmd_top(session_t *s, int argc, char **argv); /* top.c */
 void server_kick_ap_sessions(void);
 void session_main(session_t *s);       /* shell.c */
 

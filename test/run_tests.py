@@ -287,6 +287,23 @@ def t_shell(c):
     t.line("fetch --plain")
     out = t.expect(PROMPT)
     assert "Host" in out and "hosting c3shell-51M0" in out and "Disk (/)" in out and "\x1b[" not in out, out
+    t.line("top")
+    out = t.expect("STACK FREE")
+    assert "\x1b[?1049h" in out and "Mem " in out and "Disk" in out, out   # full-screen, alternate screen
+    assert re.search(r"\*\s*\d+\s+admin", out), out                     # this session, marked
+    out = t.expect("Sort:CPU%")
+    assert "netmgr" in out and "session" in out, out
+    t.send("s")
+    t.expect("Sort:STACK")
+    t.resize(60, 20)
+    t.expect("Sort:STACK")                            # redrawn for the new size
+    t.send("q")
+    out = t.expect(PROMPT)
+    assert "\x1b[?1049l" in out, out
+    t.resize(100, 30)
+    t.line("top -d 0")
+    t.expect("usage: top")
+    t.expect(PROMPT)
 
 
 @step("wifi selector: scan, wrong password, cancel")

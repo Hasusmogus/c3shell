@@ -155,6 +155,26 @@ int server_session_count(void)
     return n;
 }
 
+int server_sessions(sess_info_t *out, int max)
+{
+    int n = 0;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < C3_MAX_SESSIONS && n < max; i++) {
+        session_t *s = slots[i];
+        if (!s)
+            continue;
+        out[n].id = s->id;
+        out[n].via_ap = s->via_ap;
+        out[n].since_s = s->since_s;
+        snprintf(out[n].user, sizeof out[n].user, "%s", s->user);
+        snprintf(out[n].peer, sizeof out[n].peer, "%s", s->peer);
+        snprintf(out[n].doing, sizeof out[n].doing, "%s", s->doing);
+        n++;
+    }
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+
 void server_kick_ap_sessions(void)
 {
     pthread_mutex_lock(&lock);
@@ -171,6 +191,8 @@ static void session_thread(void *arg)
     port_log("session %d: %s connected%s", s->id, s->peer, s->via_ap ? " (setup network)" : "");
     s->cols = 80;
     s->rows = 24;
+    s->since_s = port_uptime_s();
+    snprintf(s->doing, sizeof s->doing, "login");
     s->ssh = wolfSSH_new(srv_ctx);
     if (s->ssh) {
         sshio_attach(s->ssh, &s->io);
@@ -191,6 +213,7 @@ static void session_thread(void *arg)
                 wolfSSH_SetExitStatus(s->ssh, 1);
             } else {
                 const char *cmd = wolfSSH_GetSessionCommand(s->ssh);
+                snprintf(s->doing, sizeof s->doing, "%s", t == WOLFSSH_SESSION_SUBSYSTEM ? "sftp" : "scp");
                 int st = xfer_serve(s, t == WOLFSSH_SESSION_SUBSYSTEM, cmd ? cmd : "");
                 wolfSSH_SetExitStatus(s->ssh, (word32)st);
             }
