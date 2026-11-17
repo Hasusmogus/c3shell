@@ -17,3 +17,23 @@ CONFIG_LWIP_IP4_REASSEMBLY=y
 # 'top': per-task CPU time and stack use (FreeRTOS run-time stats, esp_timer clock).
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+# Size: features this firmware has no use for.
+#  - IPv4 only (every socket here is AF_INET)
+CONFIG_LWIP_IPV6=n
+#  - 'wifi' joins password (PSK/SAE) networks; WPA2-Enterprise (EAP) and the
+#    TLS client it needs are never used
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+CONFIG_ESP_WIFI_MBEDTLS_TLS_CLIENT=n
+#  - the setup network is WPA2-PSK, so the access point needs no WPA3
+CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT=n
+#  - error codes print as numbers instead of names (only seen in a crash report)
+CONFIG_ESP_ERR_TO_NAME_LOOKUP=n
+# RAM: on the ESP32-C3, code kept in IRAM comes out of the same SRAM as the
+# heap. These run from flash instead:
+#  - WiFi's speed-ups (~27 KB). The board moves data at SSH speed (tens of
+#    KB/s, limited by the crypto), far below what WiFi manages without them.
+#  - the heap allocator (~7 KB). Safe: nothing allocates from an interrupt
+#    that runs while the flash cache is off.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
