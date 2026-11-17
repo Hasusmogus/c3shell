@@ -139,19 +139,21 @@ static int cmd_status(session_t *s, int argc, char **argv)
 /* fastfetch-style summary: a chip on the left, facts on the right */
 static int cmd_fetch(session_t *s, int argc, char **argv)
 {
-    static const char *const logo[] = {
-        "     | | | | | |     ",
-        "   .-+-+-+-+-+-+-.   ",
-        " --|             |-- ",
-        " --|   ESP32     |-- ",
-        " --|      -C3    |-- ",
-        " --|             |-- ",
-        "   '-+-+-+-+-+-+-'   ",
-        "     | | | | | |     ",
+    static const char *const logo[] = {   /* the Espressif mark, in half blocks */
+        "      ▄▄▄ ▀▀██▄▄    ",
+        "  █ ▄██████▄▄▀▀██▄  ",
+        " █ ▄▄▄▄ ▀▀████▄ ▀██ ",
+        "█ ████████▄ ▀███▄▀██",
+        "█ ███▄ ▀▀███▄ ███▄ █",
+        "█ ▀█████▄ ▀███ ███  ",
+        "▀▄    ▀███ ▀██▄ ███ ",
+        " ▀▄ ██  ███ ███ ▀▀  ",
+        "   ▀▄   ██▀ ██▀ ▄▄  ",
+        "     ▀▀▄▄▄▄▄▄▄▄▀▀   ",
     };
     enum { NLOGO = sizeof logo / sizeof logo[0], NINFO = 16 };
     bool color = !(argc > 1 && strcmp(argv[1], "--plain") == 0);
-    const char *c1 = color ? "\033[1;36m" : "", *c0 = color ? "\033[0m" : "";
+    const char *c1 = color ? "\033[1;31m" : "", *c0 = color ? "\033[0m" : "";
     char info[NINFO][112], id[5];
     int n = 0;
     net_status_t st;
@@ -210,8 +212,7 @@ static int cmd_fetch(session_t *s, int argc, char **argv)
 
     tn_puts(s, "\n");
     for (int i = 0; i < (n > NLOGO ? n : NLOGO) + (color ? 2 : 0); i++) {
-        int row = i - 1;                       /* logo starts one line down, beside the title rule */
-        const char *art = row >= 0 && row < NLOGO ? logo[row] : "                     ";
+        const char *art = i < NLOGO ? logo[i] : "                    ";
         tn_printf(s, "%s%s%s  ", c1, art, c0);
         if (i < n) {
             tn_puts(s, info[i]);
