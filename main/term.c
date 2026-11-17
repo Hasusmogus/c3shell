@@ -1,12 +1,40 @@
-/* Terminal layer: the shell's view of the user's SSH channel, plus a small
- * line editor with history. The user's SSH client puts their terminal in raw
- * mode, so echoing and line editing happen here. */
+/* Terminal layer: the shell's view of the user's SSH channel (or of the local
+ * console), plus a small line editor with history. The user's SSH client puts
+ * their terminal in raw mode, so echoing and line editing happen here. */
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include "c3shell.h"
+
+/* The console is a plain non-blocking fd. It never "closes": with nobody
+ * attached, reads find nothing and writes are dropped. */
+static int console_read(session_t *s)
+{
+    ssize_t n = read(s->io.fd, s->ibuf, sizeof s->ibuf);
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+        port_sleep_ms(100);             /* e.g. USB unplugged: don't spin */
+    return n > 0 ? (int)n : 0;
+}
+
+static void console_write(session_t *s, const uint8_t *p, size_t len)
+{
+    int stalls = 0;
+    while (len > 0) {
+        ssize_t n = write(s->io.fd, p, len);
+        if (n > 0) {
+            p += n;
+            len -= (size_t)n;
+            stalls = 0;
+        } else if (++stalls > 20) {
+            return;                     /* nobody is reading: drop it */
+        } else {
+            port_sleep_ms(5);
+        }
+    }
+}
 
 /* Fetch whatever the user has sent. >0 = bytes now in ibuf, 0 = nothing yet,
  * TN_CLOSED = the connection is gone. */
@@ -16,6 +44,11 @@ static int poll_input(session_t *s)
         s->closed = true;
     if (s->closed)
         return TN_CLOSED;
+    if (s->console) {
+        s->ipos = 0;
+        s->ilen = (uint16_t)console_read(s);
+        return s->ilen;
+    }
     s->io.nonblock = true;
     int n = sshio_read(s->ssh, s->ibuf, sizeof s->ibuf);
     if (n < 0) {
@@ -77,6 +110,10 @@ int tn_write(session_t *s, const void *data, size_t len)
         s->closed = true;
     if (s->closed)
         return -1;
+    if (s->console) {
+        console_write(s, data, len);
+        return 0;
+    }
     s->io.nonblock = true;
     if (sshio_write(s->ssh, &s->io, data, (int)len) < 0) {
         s->closed = true;

@@ -18,6 +18,7 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static session_t *slots[C3_MAX_SESSIONS];
+static session_t *console_s;
 static WOLFSSH_CTX *srv_ctx;
 
 /* ---------------- brute-force guard ---------------- */
@@ -155,12 +156,19 @@ int server_session_count(void)
     return n;
 }
 
+void server_console_attach(session_t *s)
+{
+    pthread_mutex_lock(&lock);
+    console_s = s;
+    pthread_mutex_unlock(&lock);
+}
+
 int server_sessions(sess_info_t *out, int max)
 {
     int n = 0;
     pthread_mutex_lock(&lock);
-    for (int i = 0; i < C3_MAX_SESSIONS && n < max; i++) {
-        session_t *s = slots[i];
+    for (int i = 0; i <= C3_MAX_SESSIONS && n < max; i++) {
+        session_t *s = i < C3_MAX_SESSIONS ? slots[i] : console_s;
         if (!s)
             continue;
         out[n].id = s->id;
@@ -351,5 +359,6 @@ void c3shell_main(void)
     port_log("ssh: host key fingerprint is %s (ED25519)", fp);
 
     netmgr_start();
+    console_start();
     server_run();
 }

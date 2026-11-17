@@ -23,6 +23,9 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
+#include <fcntl.h>
 #include "esp_littlefs.h"
 #include "lwip/sockets.h"
 #include "lwip/netif.h"
@@ -199,6 +202,54 @@ void port_log(const char *fmt, ...)
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     ESP_LOGI(TAG, "%s", buf);
+}
+
+/* ---------------- USB console ---------------- */
+
+static volatile bool log_quiet;
+
+/* All ESP_LOG output goes through here once the console is open: dropped
+ * while someone is logged in on it, and given the CRs the (now untranslated)
+ * port no longer adds. */
+static int log_vprintf(const char *fmt, va_list ap)
+{
+    char buf[256], out[300];
+    size_t o = 0;
+    if (log_quiet)
+        return 0;
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    for (const char *p = buf; *p && o < sizeof out - 2; p++) {
+        if (*p == '\n' && (p == buf || p[-1] != '\r'))
+            out[o++] = '\r';
+        out[o++] = *p;
+    }
+    out[o] = 0;
+    return fputs(out, stdout) < 0 ? -1 : (int)o;
+}
+
+int port_console_open(void)
+{
+    usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    cfg.rx_buffer_size = 512;
+    cfg.tx_buffer_size = 1024;
+    if (usb_serial_jtag_driver_install(&cfg) != ESP_OK)
+        return -1;
+    fflush(stdout);
+    /* bytes in both directions unchanged: the shell does its own line endings */
+    usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
+    usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_LF);
+    usb_serial_jtag_vfs_use_driver();          /* blocking-capable, select()-able */
+    esp_log_set_vprintf(log_vprintf);
+    int fd = open("/dev/usbserjtag", O_RDWR | O_NONBLOCK);
+    if (fd < 0)
+        ESP_LOGW(TAG, "console: cannot open the USB serial port");
+    return fd;
+}
+
+void port_console_quiet(bool quiet)
+{
+    fflush(stdout);
+    log_quiet = quiet;
 }
 
 void port_device_id(char out[5])

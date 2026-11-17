@@ -8,6 +8,7 @@
 #   make firmware   compile the real firmware (no flashing)
 #   make flash      compile, flash the board (first /dev/ttyACM*, or PORT=...), and start it
 #   make monitor    watch the board's serial log (shows the IP address it got)
+#   make console    log in to the board's shell over USB (no WiFi or SSH needed)
 
 WOLFSSL := third_party/wolfssl
 WOLFSSH := third_party/wolfssh
@@ -29,7 +30,7 @@ WC  := aes asn coding curve25519 ed25519 ecc error fe_operations ge_operations h
        wc_encrypt wolfmath
 TLS := internal keys ssl tls tls13 wolfio
 SSH := internal io log port ssh keygen ossh misc
-APP := term sshio fs vi top account netmgr server shell sshstore sshc xfer ovpn vpnif
+APP := term sshio fs vi top console account netmgr server shell sshstore sshc xfer ovpn vpnif
 # lwIP: the VPN tunnel's TCP/IP stack in the simulator (the chip has its own)
 LWIP_SRC := $(wildcard $(LWIP)/src/core/*.c $(LWIP)/src/core/ipv4/*.c $(LWIP)/src/api/*.c) \
             $(LWIP)/contrib/ports/unix/port/sys_arch.c
@@ -39,7 +40,7 @@ OBJS := $(APP:%=$(B)/app/%.o) $(B)/app/port_sim.o $(B)/app/vpn_proxy.o \
         $(patsubst $(LWIP)/%.c,$(B)/lwip/%.o,$(LWIP_SRC)) \
         $(WC:%=$(B)/wolfcrypt/%.o) $(TLS:%=$(B)/wolfssl/%.o) $(SSH:%=$(B)/wolfssh/%.o)
 
-.PHONY: sim run run-fresh test test-vpn firmware flash monitor clean deps
+.PHONY: sim run run-fresh test test-vpn firmware flash monitor console clean deps
 sim: $(B)/c3shell-sim
 
 deps: $(WOLFSSL)/README.md $(LWIP)/README
@@ -84,9 +85,9 @@ $(B)/wolfssh/%.o: $(WOLFSSH)/src/%.c config/user_settings.h | deps
 	@$(CC) $(CFLAGS) -w -c -o $@ $<
 
 run: sim
-	./$(B)/c3shell-sim
+	./$(B)/c3shell-sim --console $(B)/console
 run-fresh: sim
-	./$(B)/c3shell-sim --fresh
+	./$(B)/c3shell-sim --fresh --console $(B)/console
 
 test: sim
 	uv run --quiet test/run_tests.py
@@ -103,6 +104,14 @@ flash:
 	$(ESPTOOL) --port $(PORT) --after watchdog-reset chip-id
 monitor:
 	$(PIO) device monitor --port $(firstword $(wildcard /dev/ttyACM*))
+# The shell over USB. RTS and DTR stay up, so attaching does not reset the
+# board (RTS up with DTR down is its reset signal). Ctrl-] leaves.
+# CONSOLE=build-sim/console reaches the simulator's console instead.
+CONSOLE ?= $(PORT)
+console:
+	@echo "c3shell console on $(CONSOLE) - press Enter for a login prompt, Ctrl-] to leave"
+	@$(PIO) device monitor --port $(CONSOLE) --baud 115200 --raw --rts 1 --dtr 1 \
+		--exit-char 29 --menu-char 20 --quiet
 
 clean:
 	rm -rf $(B)

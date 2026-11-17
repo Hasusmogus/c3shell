@@ -60,6 +60,9 @@ typedef struct session {
     /* shown by 'top' */
     uint32_t since_s;        /* uptime when the connection arrived */
     char     doing[16];      /* "login", the running command, "" at the prompt */
+    /* local console (USB serial) instead of SSH: io.fd is the console */
+    bool     console;
+    int8_t   size_probe;     /* console: does the terminal answer size queries? 0 untried, 1 yes, -1 no */
 } session_t;
 
 int  tn_getc(session_t *s, int timeout_ms);
@@ -83,6 +86,11 @@ typedef struct {
 } sess_info_t;
 int  server_sessions(sess_info_t *out, int max);   /* snapshot of the session table */
 int  cmd_top(session_t *s, int argc, char **argv); /* top.c */
+void server_console_attach(session_t *s);          /* show a console session in 'top' (NULL = none) */
+
+/* ---------- local console (console.c) ---------- */
+void console_start(void);                  /* login prompt on the USB serial port, if there is one */
+void console_sync_size(session_t *s);      /* ask the terminal its size (there is no SSH to tell us) */
 void server_kick_ap_sessions(void);
 void session_main(session_t *s);       /* shell.c */
 

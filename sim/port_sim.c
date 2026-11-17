@@ -16,7 +16,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/prctl.h>
+#include <termios.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <time.h>
@@ -39,6 +41,7 @@ static int nnets;
 static const char *state_dir = "sim/state";
 static const char *nets_file = "sim/networks.txt";
 static int listen_port = 2222;
+static const char *console_link;       /* --console: where to put the console's symlink */
 static int delay_scale = 100;          /* percent; --fast sets 3 */
 static char **saved_argv;
 static struct timespec t0;
@@ -61,6 +64,36 @@ void port_sleep_ms(uint32_t ms) { usleep(ms * 1000u); }
 long port_free_heap(void) { return -1; }
 int  port_listen_port(void) { return listen_port; }
 void port_device_id(char out[5]) { memcpy(out, "51M0", 5); }
+
+/* The board's USB serial port becomes a pseudo-terminal; --console names a
+ * symlink to it, so a terminal program has a fixed path: picocom/screen/tio. */
+int port_console_open(void)
+{
+    if (!console_link)
+        return -1;
+    int m = posix_openpt(O_RDWR | O_NOCTTY);
+    if (m < 0 || grantpt(m) != 0 || unlockpt(m) != 0) {
+        port_log("[sim] console: no pseudo-terminal");
+        return -1;
+    }
+    const char *name = ptsname(m);
+    /* hold the far end open ourselves, raw: no echo, no line editing, and the
+     * device keeps working while no terminal program is attached */
+    int sl = open(name, O_RDWR | O_NOCTTY);
+    struct termios t;
+    if (sl >= 0 && tcgetattr(sl, &t) == 0) {
+        cfmakeraw(&t);
+        tcsetattr(sl, TCSANOW, &t);
+    }
+    fcntl(m, F_SETFL, fcntl(m, F_GETFL) | O_NONBLOCK);
+    unlink(console_link);
+    if (symlink(name, console_link) != 0)
+        port_log("[sim] console: cannot create %s", console_link);
+    port_log("[sim] USB console on %s - attach with: picocom %s", name, console_link);
+    return m;
+}
+
+void port_console_quiet(bool quiet) { (void)quiet; }   /* the log has its own terminal here */
 
 /* The simulator's threads, from /proc: CPU time is real host CPU time. */
 int port_tasks(port_task_t *out, int max, uint32_t *now_us)
@@ -543,10 +576,12 @@ int main(int argc, char **argv)
             netmgr_retry_s = atoi(argv[++i]);
         else if (strcmp(argv[i], "--block") == 0 && i + 1 < argc)
             guard_block_s = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--console") == 0 && i + 1 < argc)
+            console_link = argv[++i];
         else {
             fprintf(stderr,
                     "usage: %s [--fresh] [--fast] [--big-stacks] [--port N] [--state DIR] [--networks FILE]\n"
-                    "          [--fallback SECONDS] [--retry SECONDS] [--block SECONDS]\n", argv[0]);
+                    "          [--fallback SECONDS] [--retry SECONDS] [--block SECONDS] [--console LINK]\n", argv[0]);
             return 2;
         }
     }

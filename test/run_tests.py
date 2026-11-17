@@ -28,6 +28,7 @@ import tempfile
 import termios
 import threading
 import time
+import tty
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIM = os.path.join(ROOT, "build-sim", "c3shell-sim")
@@ -304,6 +305,80 @@ def t_shell(c):
     t.line("top -d 0")
     t.expect("usage: top")
     t.expect(PROMPT)
+
+
+class Console:
+    """The device's USB console (a pseudo-terminal in the simulator), as a
+    terminal program would see it. Answers the device's size queries."""
+
+    def __init__(self, path, rows=40, cols=120):
+        self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        tty.setraw(self.fd)
+        self.rows, self.cols = rows, cols
+        self.text = b""
+        self.eof = False
+        self.queries = 0
+
+    def _pump(self, timeout):
+        if not select.select([self.fd], [], [], timeout)[0]:
+            return
+        try:
+            data = os.read(self.fd, 65536)
+        except BlockingIOError:
+            return
+        self.text += data
+        while b"\x1b[6n" in self.text:          # where is the cursor? (after ESC[999;999H: the size)
+            self.text = self.text.replace(b"\x1b[6n", b"", 1)
+            self.queries += 1
+            os.write(self.fd, f"\x1b[{self.rows};{self.cols}R".encode())
+
+    expect = Client.expect
+
+    def send(self, s):
+        os.write(self.fd, s.encode())
+
+    def line(self, s):
+        self.send(s + "\r")
+
+    def close(self):
+        os.close(self.fd)
+
+
+@step("USB console: login prompt, wrong password, shell with the terminal's size, listed in top, logout")
+def t_console(c):
+    sim = c["sim"]
+    k = Console(c["console"])
+    k.send("\r")                                       # a getty: Enter brings the prompt
+    k.expect("login: ")
+    k.line("admin")
+    k.expect("Password: ")
+    k.line("not-it")
+    k.expect("Login incorrect")
+    k.expect("login: ")
+    k.line("admin")
+    k.expect("Password: ")
+    k.line("secret-123")
+    k.expect(r"Type 'help'")
+    k.expect(PROMPT)
+    assert k.queries >= 1, "console never asked the terminal for its size"
+    sim.wait_log("console: admin logged in")
+    k.line("fetch --plain")
+    out = k.expect(PROMPT)
+    assert "120x40, from USB console" in out, out
+    t = c["t"]                                         # seen from an SSH session
+    t.line("top")
+    out = t.expect("Sort:CPU%")
+    assert "USB console" in out, out
+    t.send("q")
+    t.expect(PROMPT)
+    k.line("status")
+    out = k.expect(PROMPT)
+    assert "you are admin from USB console" in out, out
+    k.line("exit")
+    k.expect("Goodbye")
+    k.send("\r")
+    k.expect("login: ")                                # back to the prompt
+    k.close()
 
 
 @step("wifi selector: scan, wrong password, cancel")
@@ -1006,8 +1081,10 @@ def main():
         mock_keys[port] = p
         return port
 
-    sim = Sim(os.path.join(tmp, "state"), free_port(), extra=("--fresh", "--fallback", "2", "--retry", "2", "--block", "3"))
-    ctx = {"sim": sim, "tmp": tmp, "mock": mock, "procs": procs}
+    console = os.path.join(tmp, "console")
+    sim = Sim(os.path.join(tmp, "state"), free_port(),
+              extra=("--fresh", "--fallback", "2", "--retry", "2", "--block", "3", "--console", console))
+    ctx = {"sim": sim, "tmp": tmp, "mock": mock, "procs": procs, "console": console}
     failed = 0
     try:
         for name, fn in results:

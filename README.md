@@ -82,6 +82,7 @@ needs the board.
     make firmware     # compile only
     make flash        # compile, flash over USB, start
     make monitor      # serial log
+    make console      # log in to the shell over USB
 
 1. Power it up. It hosts a WiFi network called `c3shell-XXXX` (XXXX = last
    two bytes of its MAC), password `c3shell-setup`.
@@ -98,6 +99,27 @@ needs the board.
 If the saved network is unreachable for 30 s (router off, password changed),
 the board hosts the setup network again so you are never locked out, and keeps
 retrying the saved network once a minute while nobody is logged in.
+
+### Over USB
+
+The USB cable is also a console: `make console` (or any serial terminal on
+`/dev/ttyACM*`: picocom, screen, tio) and press Enter for a login prompt. Log
+in with your account and you get the same shell as over SSH, with no WiFi or
+network needed - handy for the first setup, or when the board cannot reach a
+network. On a factory-new board, Enter starts the account setup instead.
+`exit` brings the login prompt back; Ctrl-] leaves `make console`.
+
+- `make console` keeps the USB control lines up, so attaching does not reset
+  the board. Some terminal programs drop RTS while keeping DTR, which the
+  ESP32-C3 takes as a reset: the board reboots and the prompt comes back.
+- The log shares the port: you see it at the login prompt, and it pauses
+  while someone is logged in on the console.
+- A serial line cannot report the window size, so the shell asks the terminal
+  before each command; `vi` and `top` fill the window after a resize once
+  you run the next command.
+- The console session does not take one of the three SSH slots, and appears
+  in `top`. The simulator offers one too: `make run`, then
+  `make console CONSOLE=build-sim/console`.
 
 ## Shell commands
 

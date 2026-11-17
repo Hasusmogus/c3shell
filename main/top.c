@@ -258,7 +258,7 @@ static void draw(top_t *t)
     net_status_t st;
     vpn_status_t vs;
     port_sysinfo_t si;
-    sess_info_t ss[C3_MAX_SESSIONS];
+    sess_info_t ss[C3_MAX_SESSIONS + 1];
     long total = 0, used = 0, heap, minfree, largest;
     uint32_t up = port_uptime_s();
 
@@ -270,7 +270,7 @@ static void draw(top_t *t)
     port_heap(&heap, &minfree, &largest);
     netmgr_status(&st);
     vpn_status(&vs);
-    int nss = server_sessions(ss, C3_MAX_SESSIONS);
+    int nss = server_sessions(ss, C3_MAX_SESSIONS + 1);
 
     puts_(t, "\x1b[?25l");
 

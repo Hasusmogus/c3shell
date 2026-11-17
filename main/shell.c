@@ -631,6 +631,8 @@ static int run_line(session_t *s, char *line)
         return CMD_OK;
     for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
         if (strcmp(argv[0], commands[i].name) == 0) {
+            if (s->console)
+                console_sync_size(s);
             snprintf(s->doing, sizeof s->doing, "%s", argv[0]);
             int r = commands[i].fn(s, argc, argv);
             s->doing[0] = 0;

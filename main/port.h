@@ -56,6 +56,11 @@ bool     port_sock_via_ap(int fd);    /* did this client arrive over the setup n
  * the simulator bridges to its own lwIP. -1 = failed. */
 int      port_vpn_dial(uint32_t ip_be, uint16_t port, int timeout_ms);
 
+/* ---- local console: the USB serial port on the chip, a pseudo-terminal in
+ *      the simulator (--console) ---- */
+int  port_console_open(void);          /* non-blocking fd for reading and writing, -1 if there is none */
+void port_console_quiet(bool quiet);   /* keep log lines off the console while someone is logged in */
+
 /* ---- WiFi ---- */
 typedef struct {
     char    ssid[33];
