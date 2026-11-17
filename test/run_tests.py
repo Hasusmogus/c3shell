@@ -288,6 +288,19 @@ def t_shell(c):
     t.line("fetch --plain")
     out = t.expect(PROMPT)
     assert "Host" in out and "hosting c3shell-51M0" in out and "Disk (/)" in out and "\x1b[" not in out, out
+    t.line("free")
+    out = t.expect(PROMPT)
+    assert re.search(r"total\s+used\s+free\s+largest\s+min free", out) and "Mem:" in out, out
+    assert re.search(r"Stack:\s+24\s+\d+\s+\d+", out), out        # this session's 24 KB stack, in KB
+    t.send("free -\t\t")                              # options: the second Tab lists them
+    out = t.expect("-k")
+    assert "-b" in out and "-h" in out, out
+    t.send("\x15free -h\r")                           # (the Ctrl-U redraw shows a prompt too)
+    t.expect(r"Stack:\s+24\.0K")
+    t.expect(PROMPT)
+    t.line("free -x")
+    t.expect("usage: free")
+    t.expect(PROMPT)
     t.line("top")
     out = t.expect("STACK FREE")
     assert "\x1b[?1049h" in out and "Mem " in out and "Disk" in out, out   # full-screen, alternate screen

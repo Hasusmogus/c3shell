@@ -141,6 +141,7 @@ network. On a factory-new board, Enter starts the account setup instead.
     cat file   cp from to   mv from to                df (space left)
     vi [file]                 edit a file
     status                    network, sessions, memory
+    free [-b | -k | -h]       memory: total, used, free, largest block, lowest free
     fetch [--plain]           system summary with a logo, fastfetch-style
     top [-d secs]             live view of tasks, CPU, memory, sessions (q quits)
     passwd                    change your password

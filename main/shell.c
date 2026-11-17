@@ -95,6 +95,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  cat file   cp from to   mv from to             df (space left)\n"
             "  vi [file]                 edit a file (:wq saves and quits, :q! discards)\n"
             "  status                    network, sessions, memory\n"
+            "  free [-b | -k | -h]       memory: total, used, free, largest block, lowest free\n"
             "  fetch [--plain]           system summary with a logo, fastfetch-style\n"
             "  top [-d secs]             live view of tasks, CPU, memory, sessions (q quits)\n"
             "  passwd                    change your password\n"
@@ -135,6 +136,57 @@ static int cmd_status(session_t *s, int argc, char **argv)
     if (port_free_heap() >= 0)
         tn_printf(s, "Memory:        %ld bytes free, session stack headroom %ld bytes\n", port_free_heap(),
                   port_stack_headroom());
+    return CMD_OK;
+}
+
+/* free: memory in the style of the usual command. There is no swap or cache
+ * here; what matters instead is the largest block that can still be
+ * allocated, and how low free memory has ever been. */
+static void mem_fmt(char *out, size_t cap, long v, char unit)
+{
+    if (v < 0)
+        snprintf(out, cap, "-");
+    else if (unit == 'b')
+        snprintf(out, cap, "%ld", v);
+    else if (unit == 'h' && v >= 1024 * 1024)
+        snprintf(out, cap, "%.1fM", (double)v / (1024 * 1024));
+    else if (unit == 'h')
+        snprintf(out, cap, "%.1fK", (double)v / 1024);
+    else
+        snprintf(out, cap, "%ld", v / 1024);
+}
+
+static int cmd_free(session_t *s, int argc, char **argv)
+{
+    char unit = 'k', c[5][24];
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "-h") == 0) {
+            unit = argv[i][1];
+        } else {
+            tn_puts(s, "usage: free [-b | -k | -h]   (bytes, KB (default), or human-readable)\n");
+            return CMD_OK;
+        }
+    }
+    port_sysinfo_t si;
+    long fr, minfree, largest, room = port_stack_headroom();
+    port_sysinfo(&si);
+    port_heap(&fr, &minfree, &largest);
+
+    tn_printf(s, "%-7s %10s %10s %10s %10s %10s\n", "", "total", "used", "free", "largest", "min free");
+    mem_fmt(c[0], sizeof c[0], si.heap_total, unit);
+    mem_fmt(c[1], sizeof c[1], si.heap_total > 0 && fr >= 0 ? si.heap_total - fr : -1, unit);
+    mem_fmt(c[2], sizeof c[2], fr, unit);
+    mem_fmt(c[3], sizeof c[3], largest, unit);
+    mem_fmt(c[4], sizeof c[4], minfree, unit);
+    tn_printf(s, "%-7s %10s %10s %10s %10s %10s\n", "Mem:", c[0], c[1], c[2], c[3], c[4]);
+    if (room >= 0) {                       /* this session's own stack: used = deepest it has been */
+        mem_fmt(c[0], sizeof c[0], C3_SESSION_STACK, unit);
+        mem_fmt(c[1], sizeof c[1], C3_SESSION_STACK - room, unit);
+        mem_fmt(c[2], sizeof c[2], room, unit);
+        tn_printf(s, "%-7s %10s %10s %10s\n", "Stack:", c[0], c[1], c[2]);
+    }
+    if (fr < 0)
+        tn_puts(s, "(the simulator has no fixed heap to report on)\n");
     return CMD_OK;
 }
 
@@ -572,6 +624,7 @@ static const struct {
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
     { "scp", cmd_scp },       { "vpn", cmd_vpn },
     { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
+    { "free", cmd_free },
     { "top", cmd_top },       { "htop", cmd_top },       { "ping", cmd_ping },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
@@ -651,6 +704,7 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         { "wifi", "forget", false },     { "vpn", "up down status", false },
         { "hosts", "forget", false },    { "sshkey", "new", false },
         { "fetch", "--plain", false },   { "neofetch", "--plain", false },
+        { "free", "-b -k -h", false },
         { "top", "-d", false },          { "htop", "-d", false },
         { "ls", "-l -a", true },         { "rm", "-r -f", true },
         { "mkdir", "-p", true },         { "scp", "-r -P", true },
