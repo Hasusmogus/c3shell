@@ -381,6 +381,60 @@ def t_console(c):
     k.close()
 
 
+@step("line editor: Tab completion, cursor keys, Ctrl-A/E/K/U/W, Ctrl-L, history")
+def t_editor(c):
+    t = c["t"]
+    for cmd in ("mkdir tabdir", "touch tabdir/alpha.txt", "touch tabdir/beta.txt", "touch 'tabdir/with space'"):
+        t.line(cmd)
+        t.expect(PROMPT)
+    t.send("hel\t")                                    # a command name
+    t.expect("help ")
+    t.send("\r")
+    t.expect("wifi forget")
+    t.expect(PROMPT)
+    t.send("vpn d\t\r")                               # a subcommand
+    t.expect(PROMPT)
+    t.send("cat tabd\t")                               # a directory: completed with '/', no space
+    t.expect("tabdir/")
+    t.send("\t\t")                                    # ambiguous: second Tab lists
+    out = t.expect("with space")
+    assert "alpha.txt" in out and "beta.txt" in out, out
+    t.send("a\t")
+    t.expect("alpha.txt ")
+    t.send("\r")
+    t.expect(PROMPT)
+    t.send("rm tabdir/w\t")                            # spaces: quoted for the shell
+    t.expect('"tabdir/with space" ')
+    t.send("\r")
+    t.expect(PROMPT)
+    t.line("ls tabdir")
+    out = t.expect(PROMPT)
+    assert "with space" not in out and "alpha.txt" in out, out
+    t.send("cd tab\t\r")                              # cd: directories only
+    t.expect(prompt_in("/tabdir"))
+    t.line("cd /")
+    t.expect(PROMPT)
+    t.send("sttus\x1b[D\x1b[D\x1b[Da\r")           # insert in the middle
+    t.expect("Sessions:")
+    t.expect(PROMPT)
+    t.send("garbage\x01\x0bpwd\r")                   # Ctrl-A, Ctrl-K
+    t.expect("\r\n/\r\n")
+    t.expect(PROMPT)
+    t.send("ls nothing-here\x17\x05tabdir\r")        # Ctrl-W, Ctrl-E (redraws include the prompt)
+    t.expect("beta.txt")
+    t.expect(PROMPT)
+    t.send("pw\x0c")                                   # Ctrl-L: clear, line kept
+    out = t.expect(r"\x1b\[2J.*admin@c3shell-51M0:/> pw")
+    t.send("d\r")
+    t.expect("\r\n/\r\n")
+    t.expect(PROMPT)
+    t.send("half\x1b[A\x1b[B\r")                    # history up and back keeps the fresh line
+    t.expect("half: unknown command")
+    t.expect(PROMPT)
+    t.line("rm -r tabdir")
+    t.expect(PROMPT)
+
+
 @step("ping: replies, a timeout, an unknown name, Ctrl-C")
 def t_ping(c):
     t = c["t"]

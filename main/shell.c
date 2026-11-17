@@ -616,6 +616,76 @@ static int split(char *line, char **argv, int max)
     return argc;
 }
 
+/* ---------------- Tab completion ---------------- */
+
+static void cand_add(tn_cands_t *out, const char *c)
+{
+    for (int i = 0; i < out->n; i++)
+        if (strcmp(out->c[i], c) == 0)
+            return;
+    if (out->n == TN_CANDS) {
+        out->more = true;
+        return;
+    }
+    snprintf(out->c[out->n++], sizeof out->c[0], "%s", c);
+}
+
+static void words_add(tn_cands_t *out, const char *words, const char *prefix)
+{
+    char w[24];
+    for (const char *p = words; *p;) {
+        int n = (int)strcspn(p, " ");
+        snprintf(w, sizeof w, "%.*s", n, p);
+        if (strncmp(w, prefix, strlen(prefix)) == 0)
+            cand_add(out, w);
+        p += n;
+        while (*p == ' ')
+            p++;
+    }
+}
+
+/* Command names first; after that subcommands, or names in the file area. */
+void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t *out)
+{
+    static const struct { const char *cmd, *subs; bool files; } args[] = {
+        { "wifi", "forget", false },     { "vpn", "up down status", false },
+        { "hosts", "forget", false },    { "sshkey", "new", false },
+        { "fetch", "--plain", false },   { "neofetch", "--plain", false },
+        { "top", "-d", false },          { "htop", "-d", false },
+        { "ls", "-l -a", true },         { "rm", "-r -f", true },
+        { "mkdir", "-p", true },         { "scp", "-r -P", true },
+        { "ssh", "", false },            { "ping", "", false },
+        { "help", "", false },           { "status", "", false },
+        { "passwd", "", false },         { "reboot", "", false },
+        { "factory-reset", "", false },  { "exit", "", false },
+        { "logout", "", false },         { "quit", "", false },
+    };
+    char tmp[LINE_MAX_], *argv[16];
+    snprintf(tmp, sizeof tmp, "%s", line);
+    int argc = split(tmp, argv, 16);
+    if (argc < 0)
+        return;
+    if (argc == 0) {
+        for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
+            if (commands[i].name[0] != '?' && strncmp(commands[i].name, word, strlen(word)) == 0)
+                cand_add(out, commands[i].name);
+        return;
+    }
+    bool files = true;
+    for (size_t i = 0; i < sizeof args / sizeof args[0]; i++) {
+        if (strcmp(argv[0], args[i].cmd) != 0)
+            continue;
+        files = args[i].files;
+        /* subcommands right after the command; options wherever a '-' word starts */
+        if (files ? word[0] == '-' : argc == 1)
+            words_add(out, args[i].subs, word);
+    }
+    if (strcmp(argv[0], "vpn") == 0 && argc == 2 && strcmp(argv[1], "up") == 0)
+        files = true;                      /* vpn up <profile> */
+    if (files && word[0] != '-')
+        fs_complete(s, word, strcmp(argv[0], "cd") == 0 || strcmp(argv[0], "rmdir") == 0, out);
+}
+
 static int run_line(session_t *s, char *line)
 {
     char *argv[16];
@@ -672,7 +742,7 @@ void session_main(session_t *s)
     snprintf(s->cwd, sizeof s->cwd, "/");
     while (!s->closed) {
         snprintf(prompt, sizeof prompt, "%s@%s-%s:%s> ", s->user, C3_NAME, id, s->cwd);
-        int n = tn_readline(s, prompt, line, sizeof line, RL_ECHO | RL_HISTORY, C3_IDLE_TIMEOUT_S);
+        int n = tn_readline(s, prompt, line, sizeof line, RL_ECHO | RL_HISTORY | RL_COMPLETE, C3_IDLE_TIMEOUT_S);
         if (n == TN_INTR)
             continue;
         if (n == TN_TIMEOUT)

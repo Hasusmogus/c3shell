@@ -33,6 +33,7 @@ int  sshio_write(struct WOLFSSH *ssh, sshio_t *io, const uint8_t *data, int len)
 
 #define RL_ECHO    1
 #define RL_HISTORY 2
+#define RL_COMPLETE 4     /* Tab completes commands and file names */
 
 #define HIST_N   8
 #define LINE_MAX_ 160
@@ -73,6 +74,16 @@ void tn_puts(session_t *s, const char *str);               /* text, \n -> \r\n *
 void tn_printf(session_t *s, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 int  tn_readline(session_t *s, const char *prompt, char *buf, size_t cap, int flags, int timeout_s);
 bool tn_confirm(session_t *s, const char *question);       /* requires typing "yes" */
+
+/* Tab completion: every way to finish the word being typed */
+#define TN_CANDS 48
+typedef struct {
+    int  n;
+    bool more;                       /* there were more than TN_CANDS */
+    char c[TN_CANDS][C3_PATH_MAX];   /* full replacements for the word; directories end in '/' */
+} tn_cands_t;
+void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t *out); /* line = text before the word */
+void fs_complete(session_t *s, const char *word, bool dirs_only, tn_cands_t *out);
 
 /* ---------- server ---------- */
 extern int guard_block_s;

@@ -605,6 +605,49 @@ int cmd_mv(session_t *s, int argc, char **argv)
     return 0;
 }
 
+/* Names in the file area that finish word ("no" -> "notes/", "notes/t" -> "notes/todo.txt"). */
+void fs_complete(session_t *s, const char *word, bool dirs_only, tn_cands_t *out)
+{
+    char dir[C3_PATH_MAX], vpath[C3_PATH_MAX], host[C3_HOST_MAX], full[C3_HOST_MAX + C3_NAME_MAX];
+    const char *slash = strrchr(word, '/'), *base = slash ? slash + 1 : word;
+    int dl = slash ? (int)(slash - word + 1) : 0;
+    size_t bl = strlen(base);
+    struct dirent *e;
+    struct stat st;
+
+    snprintf(dir, sizeof dir, "%.*s", dl, word);
+    if (fs_resolve(s, dl ? dir : ".", vpath, sizeof vpath) != 0 || fs_host(vpath, host, sizeof host) != 0)
+        return;
+    DIR *d = opendir(host);
+    if (!d)
+        return;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+            continue;
+        if ((e->d_name[0] == '.' && base[0] != '.') || strncmp(e->d_name, base, bl) != 0 ||
+            strlen(e->d_name) >= C3_NAME_MAX)
+            continue;
+        snprintf(full, sizeof full, "%s/%.*s", host, C3_NAME_MAX - 1, e->d_name);
+        bool isdir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+        if (dirs_only && !isdir)
+            continue;
+        if (out->n == TN_CANDS) {
+            out->more = true;
+            break;
+        }
+        size_t dn = strlen(dir), nn = strlen(e->d_name);
+        if (dn + nn + 2 > sizeof out->c[0])
+            continue;
+        char *o = out->c[out->n++];
+        memcpy(o, dir, dn);
+        memcpy(o + dn, e->d_name, nn);
+        if (isdir)
+            o[dn + nn++] = '/';
+        o[dn + nn] = 0;
+    }
+    closedir(d);
+}
+
 int cmd_df(session_t *s, int argc, char **argv)
 {
     long total = 0, used = 0;

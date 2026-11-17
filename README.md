@@ -148,6 +148,17 @@ network. On a factory-new board, Enter starts the account setup instead.
     factory-reset             erase account, WiFi, SSH data and all files
     exit                      log out
 
+### Line editing
+
+At the prompt: **Tab** completes command names, subcommands (`vpn u`) and
+names in the file area (`cat notes/t`); a second Tab lists the choices. Names
+with spaces are quoted for you. **Ctrl-L** clears the screen and keeps what
+you typed. Left/Right, Home/End and Delete move and edit within the line,
+Up/Down go through the last 8 commands, and the usual Emacs-style keys work:
+Ctrl-A/Ctrl-E (start/end), Ctrl-B/Ctrl-F, Ctrl-U/Ctrl-K (delete to the
+start/end), Ctrl-W (previous word), Ctrl-D (delete, or log out on an empty
+line), Ctrl-C (abandon the line).
+
 ### Files
 
 The file area is a 1.9 MB LittleFS partition of its own (power-loss safe,
