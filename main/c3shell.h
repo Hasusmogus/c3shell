@@ -86,6 +86,7 @@ typedef struct {
 } sess_info_t;
 int  server_sessions(sess_info_t *out, int max);   /* snapshot of the session table */
 int  cmd_top(session_t *s, int argc, char **argv); /* top.c */
+int  cmd_ping(session_t *s, int argc, char **argv); /* ping.c */
 void server_console_attach(session_t *s);          /* show a console session in 'top' (NULL = none) */
 
 /* ---------- local console (console.c) ---------- */

@@ -126,6 +126,8 @@ network. On a factory-new board, Enter starts the account setup instead.
     wifi                      pick a WiFi network to join (scan + select)
     wifi forget               forget the saved network, host the setup network
     ssh [user@]host [-p port] open a shell on another machine
+    ping [-c n] [-i s] [-W s] host
+                              check that a machine answers (Ctrl-C stops)
     scp [-r] [-P port] from... to
                               copy files to/from another machine
     vpn up [file.ovpn]        connect to an OpenVPN server (default /vpn.ovpn)

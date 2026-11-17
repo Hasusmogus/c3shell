@@ -17,7 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <termios.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
@@ -93,7 +95,15 @@ int port_console_open(void)
     return m;
 }
 
-void port_console_quiet(bool quiet) { (void)quiet; }   /* the log has its own terminal here */
+void port_console_quiet(bool quiet) { (void)quiet; }
+
+/* Linux "ping sockets": no privileges needed (net.ipv4.ping_group_range).
+ * They go out through the host's network, not the simulated VPN. */
+int port_icmp_socket(bool *with_ip_header)
+{
+    *with_ip_header = false;
+    return socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+}   /* the log has its own terminal here */
 
 /* The simulator's threads, from /proc: CPU time is real host CPU time. */
 int port_tasks(port_task_t *out, int max, uint32_t *now_us)

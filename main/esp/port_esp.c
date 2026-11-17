@@ -252,6 +252,13 @@ void port_console_quiet(bool quiet)
     log_quiet = quiet;
 }
 
+/* lwIP raw socket: routed like everything else, so also through the VPN */
+int port_icmp_socket(bool *with_ip_header)
+{
+    *with_ip_header = true;
+    return socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+}
+
 void port_device_id(char out[5])
 {
     uint8_t mac[6] = { 0 };

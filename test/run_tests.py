@@ -381,6 +381,29 @@ def t_console(c):
     k.close()
 
 
+@step("ping: replies, a timeout, an unknown name, Ctrl-C")
+def t_ping(c):
+    t = c["t"]
+    t.line("ping -c 3 -i 0.2 127.0.0.1")
+    out = t.expect(PROMPT)
+    assert out.count("bytes from 127.0.0.1: icmp_seq=") == 3, out
+    assert "3 packets transmitted, 3 received, 0% packet loss" in out and "round-trip min/avg/max" in out, out
+    t.line("ping -c 1 -W 1 192.0.2.1")                  # TEST-NET-1: nobody answers
+    out = t.expect(PROMPT, timeout=10)
+    assert "1 packets transmitted, 0 received, 100% packet loss" in out, out
+    t.line("ping no-such-host.invalid")
+    t.expect("could not resolve hostname")
+    t.expect(PROMPT)
+    t.line("ping -c 0 -i 0.2 localhost")               # until stopped
+    t.expect("icmp_seq=2 ")
+    t.send("\x03")
+    out = t.expect(PROMPT)
+    assert "--- localhost ping statistics ---" in out and "0% packet loss" in out, out
+    t.line("ping -x")
+    t.expect("usage: ping")
+    t.expect(PROMPT)
+
+
 @step("wifi selector: scan, wrong password, cancel")
 def t_wifi_fail(c):
     t = c["t"]

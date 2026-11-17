@@ -80,6 +80,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  wifi                      pick a WiFi network to join (scan + select)\n"
             "  wifi forget               forget the saved network, host the setup network\n"
             "  ssh [user@]host [-p port] open a shell on another machine\n"
+            "  ping [-c n] [-i s] [-W s] host   check that a machine answers (Ctrl-C stops)\n"
             "                            (hang up a stuck one with ~. on a new line; ~~. from OpenSSH)\n"
             "  scp [-r] [-P port] from... to   copy files to/from another machine,\n"
             "                            e.g. scp notes.txt me@pc:  or  scp me@pc:work.ovpn .\n"
@@ -571,7 +572,7 @@ static const struct {
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
     { "scp", cmd_scp },       { "vpn", cmd_vpn },
     { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
-    { "top", cmd_top },       { "htop", cmd_top },
+    { "top", cmd_top },       { "htop", cmd_top },       { "ping", cmd_ping },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },

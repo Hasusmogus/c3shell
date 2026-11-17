@@ -61,6 +61,11 @@ int      port_vpn_dial(uint32_t ip_be, uint16_t port, int timeout_ms);
 int  port_console_open(void);          /* non-blocking fd for reading and writing, -1 if there is none */
 void port_console_quiet(bool quiet);   /* keep log lines off the console while someone is logged in */
 
+/* ---- ping ---- */
+/* A socket for ICMP echo. *with_ip_header: replies arrive with their IP
+ * header in front (a raw socket, as on the chip). -1 if there is none. */
+int  port_icmp_socket(bool *with_ip_header);
+
 /* ---- WiFi ---- */
 typedef struct {
     char    ssid[33];
