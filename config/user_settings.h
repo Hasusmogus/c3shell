@@ -51,6 +51,17 @@
 
 #define HAVE_AESGCM
 #define GCM_TABLE_4BIT
+#ifdef ESP_PLATFORM
+/* On the chip, AES blocks go to the ESP32-C3's AES engine (port_esp.c hands
+ * them to ESP-IDF's esp_aes, which shares the engine safely with mbedTLS).
+ * Software AES on RISC-V stays constant-time by touching every cache line of
+ * its tables on every lookup, which made AES most of the cost of moving data;
+ * the engine is constant-time by construction. The simulator keeps software AES.
+ * Only AES is routed there: hashing, ECC and RSA stay in software. */
+#define WOLF_CRYPTO_CB
+#define WOLF_CRYPTO_CB_FIND      /* AES objects made with INVALID_DEVID find the engine too */
+#define WOLF_CRYPTO_CB_ONLY_AES  /* and the software AES tables are left out */
+#endif
 #define WOLFSSL_AES_COUNTER
 #define WOLFSSL_AES_DIRECT
 

@@ -341,6 +341,7 @@ void c3shell_main(void)
     char fp[64];
 
     port_log(C3_NAME " " C3_VERSION " starting");
+    port_crypto_init();
     wolfSSH_Init();
 
     /* The server's identity: made once, kept until a factory reset. */

@@ -24,6 +24,12 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "driver/usb_serial_jtag.h"
+#include "aes/esp_aes.h"
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/cryptocb.h>
+#include <wolfssl/wolfcrypt/error-crypt.h>
+#include <wolfssl/wolfcrypt/wc_port.h>
 #include "driver/usb_serial_jtag_vfs.h"
 #include <fcntl.h>
 #include "esp_littlefs.h"
@@ -205,6 +211,48 @@ void port_log(const char *fmt, ...)
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     ESP_LOGI(TAG, "%s", buf);
+}
+
+/* ---------------- AES on the AES engine ---------------- */
+
+/* wolfCrypt is built with WOLF_CRYPTO_CB_ONLY_AES on the chip: every AES block
+ * (GCM, CTR, ...) comes here and goes through ESP-IDF's esp_aes, whose lock
+ * the engine shares with mbedTLS (the WiFi supplicant). */
+#define AES_ENGINE_DEVID 0x43334145   /* any id other than INVALID_DEVID */
+
+static int aes_engine(int devId, wc_CryptoInfo *info, void *ctx)
+{
+    (void)devId;
+    (void)ctx;
+    if (info->algo_type != WC_ALGO_TYPE_CIPHER || info->cipher.type != WC_CIPHER_AES_ECB)
+        return CRYPTOCB_UNAVAILABLE;           /* GCM/CTR are built on the block function */
+    Aes *aes = info->cipher.aesecb.aes;
+    const byte *in = info->cipher.aesecb.in;
+    byte *out = info->cipher.aesecb.out;
+    word32 sz = info->cipher.aesecb.sz;
+    int mode = info->cipher.enc ? ESP_AES_ENCRYPT : ESP_AES_DECRYPT;
+    esp_aes_context c;
+
+    esp_aes_init(&c);
+    int r = esp_aes_setkey(&c, (const unsigned char *)aes->devKey, (unsigned)aes->keylen * 8);
+    for (word32 o = 0; r == 0 && o + WC_AES_BLOCK_SIZE <= sz; o += WC_AES_BLOCK_SIZE)
+        r = esp_aes_crypt_ecb(&c, mode, in + o, out + o);
+    esp_aes_free(&c);                          /* zeroes the key copy */
+    return r == 0 ? 0 : WC_HW_E;
+}
+
+/* AES objects are made with INVALID_DEVID throughout (wolfSSH, wolfSSL, ovpn.c):
+ * send every cipher to the engine, everything else stays in software. */
+static int aes_engine_find(int devId, int algoType)
+{
+    return algoType == WC_ALGO_TYPE_CIPHER ? AES_ENGINE_DEVID : devId;
+}
+
+void port_crypto_init(void)
+{
+    wolfCrypt_Init();                          /* it clears the device table: register after */
+    wc_CryptoCb_RegisterDevice(AES_ENGINE_DEVID, aes_engine, NULL);
+    wc_CryptoCb_SetDeviceFindCb(aes_engine_find);
 }
 
 /* ---------------- USB console ---------------- */

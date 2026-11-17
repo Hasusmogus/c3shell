@@ -3,7 +3,7 @@
 # (config/user_settings.h) - the same file list and configuration the
 # simulator's Makefile uses.
 set(W ${CMAKE_CURRENT_LIST_DIR}/../../third_party/wolfssl)
-set(names aes asn coding curve25519 ed25519 ecc error fe_operations ge_operations hash hmac
+set(names aes asn coding cryptocb curve25519 ed25519 ecc error fe_operations ge_operations hash hmac
           kdf logging md5 memory pwdbased random rsa sha sha256 sha512 signature sp_int wc_port
           wc_encrypt wolfmath)
 set(srcs)

@@ -21,6 +21,7 @@ int  port_fs_usage(long *total, long *used);
 void port_fs_wipe(void);
 
 /* ---- system ---- */
+void     port_crypto_init(void);      /* before any crypto: hook up hardware acceleration, if any */
 uint32_t port_uptime_s(void);
 void     port_sleep_ms(uint32_t ms);
 void     port_random(void *buf, size_t len);

@@ -96,6 +96,7 @@ int port_console_open(void)
 }
 
 void port_console_quiet(bool quiet) { (void)quiet; }
+void port_crypto_init(void) {}      /* software crypto only */
 
 /* Linux "ping sockets": no privileges needed (net.ipv4.ping_group_range).
  * They go out through the host's network, not the simulated VPN. */
