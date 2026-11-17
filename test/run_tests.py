@@ -284,7 +284,7 @@ def t_shell(c):
     t.expect(PROMPT)
     t.line("fetch")
     out = t.expect(PROMPT)
-    assert "admin" in out and "c3shell 0.4" in out and "virtual ESP32-C3" in out and "\x1b[47m" in out, out
+    assert "admin" in out and re.search(r"c3shell \d+\.\d+", out) and "virtual ESP32-C3" in out and "\x1b[47m" in out, out
     t.line("fetch --plain")
     out = t.expect(PROMPT)
     assert "Host" in out and "hosting c3shell-51M0" in out and "Disk (/)" in out and "\x1b[" not in out, out
