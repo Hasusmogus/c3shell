@@ -40,15 +40,17 @@ static bool interrupted(session_t *s)
     int n;
     while ((n = tn_read_avail(s, b, sizeof b)) > 0)
         for (int i = 0; i < n; i++)
-            if (b[i] == 0x03 || b[i] == 'q')
+            if (b[i] == 0x03 || b[i] == 'q') {
+                s->intr = b[i] == 0x03;     /* Ctrl-C also stops a script or loop around it */
                 return true;
+            }
     return n == TN_CLOSED;
 }
 
 static int usage(session_t *s)
 {
     tn_puts(s, "usage: ping [-c count] [-i seconds] [-W timeout] host   (-c 0: until Ctrl-C)\n");
-    return 0;
+    return 2;
 }
 
 int cmd_ping(session_t *s, int argc, char **argv)
@@ -83,7 +85,7 @@ int cmd_ping(session_t *s, int argc, char **argv)
     hints.ai_family = AF_INET;
     if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) {
         tn_printf(s, "ping: could not resolve hostname %s\n", host);
-        return 0;
+        return 2;
     }
     struct sockaddr_in dst = *(struct sockaddr_in *)res->ai_addr;
     freeaddrinfo(res);
@@ -94,7 +96,7 @@ int cmd_ping(session_t *s, int argc, char **argv)
     int fd = port_icmp_socket(&with_ip);
     if (fd < 0) {
         tn_printf(s, "ping: cannot open an ICMP socket (%s)\n", strerror(errno));
-        return 0;
+        return 2;
     }
     uint16_t id;
     port_random(&id, sizeof id);
@@ -191,5 +193,5 @@ int cmd_ping(session_t *s, int argc, char **argv)
               sent ? (sent - got) * 100 / sent : 0);
     if (got)
         tn_printf(s, "round-trip min/avg/max = %.1f/%.1f/%.1f ms\n", rmin, rsum / got, rmax);
-    return 0;
+    return got ? 0 : 1;                    /* like ping: 1 when nothing answered */
 }

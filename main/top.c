@@ -452,12 +452,12 @@ int cmd_top(session_t *s, int argc, char **argv)
         delay = atoi(argv[2]);
     } else if (argc != 1) {
         tn_puts(s, "usage: top [-d seconds]   (1-60, default 2)\n");
-        return 0;
+        return 2;
     }
     top_t *t = calloc(1, sizeof *t);
     if (!t) {
         tn_puts(s, "top: out of memory\n");
-        return 0;
+        return 1;
     }
     t->s = s;
     t->delay_s = delay;
@@ -487,6 +487,7 @@ int cmd_top(session_t *s, int argc, char **argv)
             switch (k) {
             case TN_CLOSED: case 'q': case 'Q': case 0x03: case 0x04: case 0x1B: case K_F10:
                 quit = true;
+                s->intr = k == 0x03;        /* Ctrl-C also stops a script or loop around it */
                 continue;
             case 's': case 'S': case '>': case '<':
                 t->sort = (t->sort + 1) % SORT_N;

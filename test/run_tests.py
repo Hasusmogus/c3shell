@@ -466,6 +466,102 @@ def t_editor(c):
     t.expect(PROMPT)
 
 
+@step("sh: lists, variables, arithmetic, quoting, if/while/for, redirection, scripts, Ctrl-C")
+def t_sh(c):
+    sim = c["sim"]
+    t = r_login = login(sim)
+    def run(cmd, timeout=15):
+        t.line(cmd)
+        out = t.expect(PROMPT, timeout=timeout)
+        return out.split("\r\n", 1)[1] if "\r\n" in out else out
+    out = run('a=5; b=7; echo "sum $((a + b)) prod $((a*b))" \'$a\' \\$b')
+    assert "sum 12 prod 35 $a $b" in out, out
+    out = run("ls /nope; echo status=$?")
+    assert "status=1" in out, out
+    out = run("ls /nope && echo yes || echo no; false || echo f; ! false && echo negated")
+    assert "\r\nno\r\n" in out and "\r\nf\r\n" in out and "negated" in out and "yes" not in out, out
+    out = run("i=0; while [ $i -lt 3 ]; do echo i=$i; i=$((i+1)); done; until test $i -eq 0; do i=$((i-1)); done; echo end=$i")
+    assert "i=0\r\ni=1\r\ni=2\r\nend=0" in out, out
+    out = run("x='p q'; for w in $x \"$x\" 'r s'; do echo [$w]; done")
+    assert "[p]\r\n[q]\r\n[p q]\r\n[r s]" in out, out
+    out = run("for i in 1 2 3 4 5; do if [ $i = 2 ]; then continue; elif [ $i = 4 ]; then break; fi; echo n$i; done")
+    assert "n1\r\nn3\r\n" in out and "n2" not in out and "n5" not in out, out
+    out = run("echo one > /f.txt; echo two >> /f.txt; cat /f.txt; ls /f.txt > /g.txt; cat /g.txt")
+    assert "one\r\ntwo\r\nf.txt" in out, out
+    assert open(os.path.join(c["tmp"], "state", "fs", "f.txt")).read() == "one\ntwo\n"   # plain \n in files
+    out = run("echo x > /nodir/f; echo $?")
+    assert "No such file or directory" in out and "\r\n1\r\n" in out, out
+    out = run("echo hi | cat")
+    assert "pipes (|) are not supported" in out, out
+    out = run("frobnicate; echo $?")
+    assert "unknown command" in out and "127" in out, out
+    t.line("if true")                           # a multi-line construct at the prompt
+    t.expect("\r\n> ")
+    t.line("then echo inside")
+    t.expect("\r\n> ")
+    out = run("fi")
+    assert "inside" in out, out
+    # scripts: arguments, shift, exit only ends the script, ., read
+    script = ("#!/bin/sh\n# a comment\necho \"$0 has $# args: $@\"\n"
+              "for a in \"$@\"; do echo \"<$a>\"; done\nshift; echo first=$1\n"
+              "if [ \"$1\" = stop ]; then exit 3; fi\necho not reached\n")
+    with open(os.path.join(c["tmp"], "state", "fs", "s.sh"), "w") as f:
+        f.write(script)
+    out = run("sh s.sh one 'stop' 'x y'; echo rc=$?")
+    assert "s.sh has 3 args: one stop x y" in out and "<x y>" in out and "first=stop" in out, out
+    assert "not reached" not in out and "rc=3" in out, out
+    with open(os.path.join(c["tmp"], "state", "fs", "lib.sh"), "w") as f:
+        f.write("greeting=hello\n")
+    out = run(". lib.sh; echo $greeting")
+    assert out.startswith("hello\r\n"), out
+    t.line("read -p 'name? ' who rest; echo \"[$who] [$rest]\"")
+    t.expect("name\\? ")
+    t.line("ann b  c ")
+    out = t.expect(PROMPT)
+    assert "[ann] [b  c]" in out, out
+    with open(os.path.join(c["tmp"], "state", "fs", "bad.sh"), "w") as f:
+        f.write("echo ok\nif true; then\n  echo x\ndone\n")
+    out = run("sh bad.sh; echo rc=$?")
+    assert "bad.sh: line 4: unexpected 'done'" in out and "rc=2" in out and "\r\nok" not in out, out
+    # Ctrl-C stops an endless loop, and a sleep
+    t.line("while true; do echo spin; done")
+    t.expect("spin")
+    t.send("\x03")
+    t.expect(PROMPT, timeout=10)
+    out = run("echo $?")
+    assert "130" in out, out
+    t.line("sleep 30; echo after")
+    time.sleep(0.5)
+    t.send("\x03")
+    out = t.expect(PROMPT, timeout=5)
+    assert "\r\nafter" not in out, out           # (the command line itself says "after")
+    # a long script costs no extra stack (a; b; c ... runs as a loop)
+    with open(os.path.join(c["tmp"], "state", "fs", "long.sh"), "w") as f:
+        f.write("n=0\n" + "n=$((n+1))\n" * 500 + "echo n=$n\nfree\n")
+    out = run("sh long.sh", timeout=30)
+    assert "n=500" in out, out
+    used_long = int(re.search(r"Stack:\s+\d+\s+(\d+)", out).group(1))
+    # scripts running scripts, to the limit, with a name lookup at the bottom (the deepest stack)
+    for i in range(1, 5):
+        body = f"sh n{i + 1}.sh\n" if i < 4 else "ping -c 1 -W 1 localhost > /dev.txt\nfree\n"
+        with open(os.path.join(c["tmp"], "state", "fs", f"n{i}.sh"), "w") as f:
+            f.write(body)
+    out = run("sh n1.sh", timeout=20)
+    m = re.search(r"Stack:\s+(\d+)\s+(\d+)", out)
+    assert m, out
+    print(f"  (stack: 500-line script {used_long} KB; 4 nested scripts + a name lookup {m.group(2)} of {m.group(1)} KB;"
+          " x86-64 build)")
+    with open(os.path.join(c["tmp"], "state", "fs", "n4.sh"), "w") as f:
+        f.write("sh n5.sh\n")
+    with open(os.path.join(c["tmp"], "state", "fs", "n5.sh"), "w") as f:
+        f.write("echo too deep\n")
+    out = run("sh n1.sh")
+    assert "nested too deeply" in out and "too deep\r\n" not in out.replace("nested too deeply", ""), out
+    run("rm f.txt g.txt s.sh lib.sh bad.sh dev.txt long.sh n1.sh n2.sh n3.sh n4.sh n5.sh")
+    t.line("exit")                              # at the prompt, exit logs out
+    t.expect_closed()
+
+
 @step("ping: replies, a timeout, an unknown name, Ctrl-C")
 def t_ping(c):
     t = c["t"]
@@ -812,8 +908,14 @@ def t_files(c):
     out = run("cat 'docs/deep/two words.txt'")
     out = run("rm /")
     assert "refusing" in out, out
-    out = run('echo "unclosed')
-    assert "missing closing quote" in out, out
+    t.line('echo "unclosed')                    # an open quote continues on the next line, as in sh
+    t.expect("\r\n> ")
+    out = run('still"')
+    assert "unclosed\r\nstill" in out, out
+    t.line("echo 'abandoned")
+    t.expect("\r\n> ")
+    t.send("\x03")                             # Ctrl-C drops the unfinished entry
+    t.expect(PROMPT)
     out = run("df")
     assert re.search(r"\d+ KB used of 1984 KB", out), out
     run("cd docs/deep", "/docs/deep")

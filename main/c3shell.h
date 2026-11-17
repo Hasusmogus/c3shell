@@ -9,6 +9,7 @@
 #include "port.h"
 
 struct WOLFSSH;
+struct shstate;
 
 /* ---------- SSH transport glue (sshio.c) ---------- */
 typedef struct {
@@ -64,6 +65,11 @@ typedef struct session {
     /* local console (USB serial) instead of SSH: io.fd is the console */
     bool     console;
     int8_t   size_probe;     /* console: does the terminal answer size queries? 0 untried, 1 yes, -1 no */
+    /* shell language */
+    bool     logout;         /* a command ended the session (exit, reboot, joining another network ...) */
+    volatile bool intr;      /* Ctrl-C seen: a running script or loop stops */
+    void    *redir;          /* FILE* that output goes to instead of the terminal (cmd > file) */
+    struct shstate *sh;      /* variables and $? */
 } session_t;
 
 int  tn_getc(session_t *s, int timeout_ms);
@@ -74,6 +80,7 @@ void tn_puts(session_t *s, const char *str);               /* text, \n -> \r\n *
 void tn_printf(session_t *s, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 int  tn_readline(session_t *s, const char *prompt, char *buf, size_t cap, int flags, int timeout_s);
 bool tn_confirm(session_t *s, const char *question);       /* requires typing "yes" */
+bool tn_peek_intr(session_t *s);                           /* Ctrl-C among the typed-ahead input? (sets s->intr) */
 
 /* Tab completion: every way to finish the word being typed */
 #define TN_CANDS 48
@@ -105,6 +112,13 @@ void console_start(void);                  /* login prompt on the USB serial por
 void console_sync_size(session_t *s);      /* ask the terminal its size (there is no SSH to tell us) */
 void server_kick_ap_sessions(void);
 void session_main(session_t *s);       /* shell.c */
+int  shell_command(session_t *s, int argc, char **argv); /* run a command by name: exit status, -1 if there is none */
+
+/* ---------- shell language (script.c) ---------- */
+int  sh_run(session_t *s, const char *text);     /* what was typed at the prompt: exit status */
+bool sh_incomplete(const char *text);             /* an if/while/for or a quote is still open: read more */
+void sh_free(session_t *s);
+extern const char *const sh_builtins[];           /* names, for Tab completion (NULL-terminated) */
 
 /* ---------- file area (fs.c, vi.c) ---------- */
 int  fs_resolve(session_t *s, const char *arg, char *vpath, size_t vcap);  /* 0 or -errno */

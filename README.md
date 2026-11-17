@@ -151,6 +151,33 @@ network. On a factory-new board, Enter starts the account setup instead.
     factory-reset             erase account, WiFi, SSH data and all files
     exit                      log out
 
+### Scripting
+
+The prompt understands a small sh, and `sh file [args]` runs a script written
+in it (`vi` one, or `scp` it over):
+
+    # count down, then save a status report
+    n=$1; [ -z "$n" ] && n=3        # the first argument, or 3
+    while [ $n -gt 0 ]; do
+        echo "$n ..."; sleep 1; n=$((n - 1))
+    done
+    ping -c 1 10.0.0.1 > /ping.txt && echo up || echo "no answer"
+    for f in a.txt b.txt; do [ -f $f ] && cat $f >> /all.txt; done
+
+- `;` and newlines, `&&`, `||`, `!`, `# comments`.
+- `NAME=value`, `$NAME`, `${NAME}`, `$?` (the last exit status), `$#`, `$0`..`$9`, `$@`/`"$@"`, `$((arithmetic))` with `+ - * / % ( ) < <= > >= == != && || !`.
+- `'single'` and `"double"` quotes and `\` as in sh; unquoted `$vars` are split at spaces.
+- `cmd > file` and `cmd >> file` send a command's output into a file in the file area.
+- `if`/`elif`/`else`/`fi`, `while` and `until` ... `do`/`done`, `for x in ...; do`/`done` (without `in`: the script's arguments), `break [n]`, `continue [n]`.
+- Builtins: `echo [-n]`, `test`/`[ ]` (`-n -z = != -eq -ne -lt -le -gt -ge -e -f -d -s ! -a -o`), `true`, `false`, `sleep` (fractions work), `read [-p prompt] [name...]`, `set` (lists the variables), `unset`, `export` (just assigns), `shift`, `exit [n]` (ends a script; at the prompt, logs out), `.`/`source file`.
+- Every command returns an exit status: 0 for success, 1 for a failure, 2 for wrong usage (`ping` returns 1 when nothing answered), 127 for an unknown command, 130 after Ctrl-C.
+- An unfinished `if`, loop or quote at the prompt continues on a `> ` line.
+- Ctrl-C stops a running script or loop.
+
+There are no processes on the device, so there are no pipes, `$(...)`,
+background jobs, subshells or functions; scripts can run scripts 4 deep, and
+a script can be 32 KB.
+
 ### Line editing
 
 At the prompt: **Tab** completes command names, subcommands (`vpn u`) and

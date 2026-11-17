@@ -1102,13 +1102,13 @@ int cmd_vi(session_t *s, int argc, char **argv)
     char vp[C3_PATH_MAX];
     if (!v) {
         tn_puts(s, "vi: out of memory\n");
-        return 0;
+        return 1;
     }
     v->s = s;
     if (argc > 2) {
         tn_puts(s, "usage: vi [file]\n");
         free(v);
-        return 0;
+        return 2;
     }
     if (argc == 2) {
         int r = fs_resolve(s, argv[1], vp, sizeof vp);
@@ -1117,21 +1117,21 @@ int cmd_vi(session_t *s, int argc, char **argv)
         if (r < 0) {
             tn_printf(s, "vi: %s: %s\n", argv[1], strerror(-r));
             free(v);
-            return 0;
+            return 1;
         }
         if (fs_host(vp, host, sizeof host) != 0) {
             tn_printf(s, "vi: %s: %s\n", argv[1], strerror(ENAMETOOLONG));
             free(v);
-            return 0;
+            return 1;
         }
         if (stat(host, &st) == 0 && S_ISDIR(st.st_mode)) {
             tn_printf(s, "vi: %s: Is a directory\n", argv[1]);
             free(v);
-            return 0;
+            return 1;
         }
         if (open_file(v, vp) != 0) {
             free(v);
-            return 0;
+            return 1;
         }
     } else {
         load_text(v, "", 0);

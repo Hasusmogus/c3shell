@@ -93,6 +93,21 @@ bool tn_input_ready(session_t *s)
     return s->ipos < s->ilen || poll_input(s) > 0;
 }
 
+/* Is there a Ctrl-C among what has been typed ahead? Nothing else is consumed,
+ * so a script can check between commands without eating input meant for read. */
+bool tn_peek_intr(session_t *s)
+{
+    if (!tn_input_ready(s))
+        return false;
+    for (int i = s->ipos; i < s->ilen; i++)
+        if (s->ibuf[i] == 0x03) {
+            s->ipos = s->ilen;
+            s->intr = true;
+            return true;
+        }
+    return false;
+}
+
 int tn_read_avail(session_t *s, uint8_t *buf, int cap)
 {
     if (s->ipos >= s->ilen && poll_input(s) == TN_CLOSED)
@@ -111,6 +126,10 @@ int tn_write(session_t *s, const void *data, size_t len)
         s->closed = true;
     if (s->closed)
         return -1;
+    if (s->redir) {                     /* cmd > file */
+        fwrite(data, 1, len, (FILE *)s->redir);
+        return 0;
+    }
     if (s->console) {
         console_write(s, data, len);
         return 0;
@@ -128,6 +147,11 @@ void tn_puts(session_t *s, const char *str)
     uint8_t out[256];
     size_t o = 0;
     char prev = 0;
+    if (s->redir) {                     /* into a file: plain \n line ends */
+        if (!s->closed)
+            fputs(str, (FILE *)s->redir);
+        return;
+    }
     for (; *str; prev = *str++) {
         if (o > sizeof out - 3) {
             tn_write(s, out, o);
@@ -472,6 +496,7 @@ int tn_readline(session_t *s, const char *prompt, char *buf, size_t cap, int fla
             ed_move(e, e->len);
             tn_puts(s, "^C\n");
             buf[0] = 0;
+            s->intr = true;                         /* also stops a script that asked */
             return TN_INTR;
         case 0x04:                                  /* Ctrl-D: end on an empty line, else delete */
             if (e->len == 0) {

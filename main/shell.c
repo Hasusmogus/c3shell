@@ -5,7 +5,15 @@
 #include "c3shell.h"
 
 #define SCAN_MAX 20
-enum { CMD_OK = 0, CMD_EXIT = 1 };
+/* A command returns its exit status: 0 success, 1 failure, 2 wrong usage. */
+enum { CMD_OK = 0, CMD_FAIL = 1, CMD_USAGE = 2 };
+
+/* The session ends after this command (exit, reboot, the network going away ...). */
+static int logout(session_t *s)
+{
+    s->logout = true;
+    return CMD_OK;
+}
 
 /* ---------------- account setup / login ---------------- */
 
@@ -102,7 +110,12 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  passwd                    change your password\n"
             "  reboot                    restart the device\n"
             "  factory-reset             erase account, WiFi, SSH data and all files\n"
-            "  exit                      log out\n");
+            "  exit                      log out\n"
+            "  sh file [args]            run a script; the prompt speaks the same language:\n"
+            "                            a=1; echo $a $((a+1))  cmd && cmd || cmd  cmd > file  >> file\n"
+            "                            if/elif/else/fi  while/until ... do/done  for x in ...; do/done\n"
+            "                            echo test [ ] read sleep true false set unset shift break\n"
+            "                            continue exit . (no pipes or $(...): there are no processes)\n");
     return CMD_OK;
 }
 
@@ -165,7 +178,7 @@ static int cmd_free(session_t *s, int argc, char **argv)
             unit = argv[i][1];
         } else {
             tn_puts(s, "usage: free [-b | -k | -h]   (bytes, KB (default), or human-readable)\n");
-            return CMD_OK;
+            return CMD_USAGE;
         }
     }
     port_sysinfo_t si;
@@ -205,7 +218,7 @@ static int cmd_uname(session_t *s, int argc, char **argv)
             const char *a = argv[i];
             if (a[0] != '-' || !a[1] || strspn(a + 1, "asnrvmo") != strlen(a + 1)) {
                 tn_puts(s, "usage: uname [-asnrvmo]\n");
-                return CMD_OK;
+                return CMD_USAGE;
             }
             for (a++; *a; a++)
                 if (!strchr(want, *a) && strlen(want) < sizeof want - 1)
@@ -239,7 +252,7 @@ static int cmd_uptime(session_t *s, int argc, char **argv)
 
     if (argc > 1 && !pretty) {
         tn_puts(s, "usage: uptime [-p]\n");
-        return CMD_OK;
+        return CMD_USAGE;
     }
     if (pretty) {
         n = snprintf(out, sizeof out, "up");
@@ -312,7 +325,7 @@ static int cmd_fetch(session_t *s, int argc, char **argv)
 
     if (argc > 1 && color) {
         tn_puts(s, "usage: fetch [--plain]\n");
-        return CMD_OK;
+        return CMD_USAGE;
     }
     port_device_id(id);
     port_sysinfo(&si);
@@ -390,10 +403,10 @@ static int wifi_join(session_t *s, const port_ap_t *ap)
         snprintf(prompt, sizeof prompt, "Password for '%s': ", ap->ssid);
         int n = tn_readline(s, prompt, pass, sizeof pass, 0, 120);
         if (n < 0)
-            return n == TN_CLOSED ? CMD_EXIT : CMD_OK;
+            return n == TN_CLOSED ? logout(s) : CMD_FAIL;
         if (n < 8) {
             tn_puts(s, "WiFi passwords have at least 8 characters.\n");
-            return CMD_OK;
+            return CMD_FAIL;
         }
     }
     tn_printf(s, "Joining '%s' ...\n", ap->ssid);
@@ -405,7 +418,7 @@ static int wifi_join(session_t *s, const port_ap_t *ap)
                   : r == PORT_WIFI_NOT_FOUND ? "network not found"
                   : r == PORT_WIFI_TIMEOUT   ? "no answer (timed out)"
                                              : "radio error");
-        return CMD_OK;
+        return CMD_FAIL;
     }
     netmgr_status(&st);
     tn_printf(s, "\nJoined '%s'. This device is now at %s.\n", ap->ssid, st.sta_ip);
@@ -414,7 +427,7 @@ static int wifi_join(session_t *s, const port_ap_t *ap)
     tn_printf(s, "Join '%s' yourself and reconnect with:  ssh %s@%s\n\n", ap->ssid, s->user, st.sta_ip);
     port_sleep_ms(C3_AP_LINGER_MS);
     netmgr_drop_ap();
-    return CMD_EXIT;        /* this connection does not survive the switch */
+    return logout(s);       /* this connection does not survive the switch */
 }
 
 static int cmd_wifi(session_t *s, int argc, char **argv)
@@ -427,24 +440,24 @@ static int cmd_wifi(session_t *s, int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "forget") == 0) {
         if (!st.have_saved) {
             tn_puts(s, "No network is saved.\n");
-            return CMD_OK;
+            return CMD_FAIL;
         }
         tn_printf(s, "Forget '%s' and go back to hosting '%s'?", st.sta_ssid, st.ap_ssid);
         if (!tn_confirm(s, ""))
-            return CMD_OK;
+            return CMD_FAIL;
         tn_printf(s, "Done. Find this device on the WiFi network '%s' (ssh %s@%s).\n", st.ap_ssid, s->user, st.ap_ip);
         port_sleep_ms(500);
         netmgr_forget();
-        return s->via_ap ? CMD_OK : CMD_EXIT;
+        return s->via_ap ? CMD_OK : logout(s);
     }
     if (argc > 1) {
         tn_puts(s, "usage: wifi | wifi forget\n");
-        return CMD_OK;
+        return CMD_USAGE;
     }
     if (st.sta_up && !s->via_ap) {
         tn_printf(s, "You are connected through '%s'. Switching networks ends this session", st.sta_ssid);
         if (!tn_confirm(s, ".\n"))
-            return CMD_OK;
+            return CMD_FAIL;
     }
 
     for (;;) {
@@ -469,16 +482,16 @@ static int cmd_wifi(session_t *s, int argc, char **argv)
         int len = tn_readline(s, "\nNetwork number, r = rescan, m = type a name, q = cancel: ", line, sizeof line,
                               RL_ECHO, 180);
         if (len == TN_CLOSED || len == TN_TIMEOUT)
-            return CMD_EXIT;
+            return logout(s);
         if (len < 0 || line[0] == 'q' || line[0] == 0)
-            return CMD_OK;
+            return CMD_FAIL;
         if (line[0] == 'r')
             continue;
         if (line[0] == 'm') {
             port_ap_t manual = { .secure = 1 };
             len = tn_readline(s, "Network name (SSID): ", manual.ssid, sizeof manual.ssid, RL_ECHO, 120);
             if (len <= 0)
-                return len == TN_CLOSED ? CMD_EXIT : CMD_OK;
+                return len == TN_CLOSED ? logout(s) : CMD_FAIL;
             for (int i = 0; i < n; i++)
                 if (strcmp(aps[i].ssid, manual.ssid) == 0)
                     manual.secure = aps[i].secure;
@@ -521,22 +534,21 @@ static int cmd_ssh(session_t *s, int argc, char **argv)
     }
     if (host[0] == 0 || port < 1 || port > 65535) {
         tn_puts(s, "usage: ssh [user@]host [-p port]\n");
-        return CMD_OK;
+        return CMD_USAGE;
     }
     if (user[0] == 0) {
         char prompt[64];
         snprintf(prompt, sizeof prompt, "login as [%s]: ", s->user);
         int n = tn_readline(s, prompt, user, sizeof user, RL_ECHO, 60);
         if (n < 0)
-            return n == TN_CLOSED ? CMD_EXIT : CMD_OK;
+            return n == TN_CLOSED ? logout(s) : CMD_FAIL;
         if (n == 0)
             snprintf(user, sizeof user, "%s", s->user);
     }
     netmgr_status(&st);
     if (!st.sta_up)
         tn_puts(s, "Note: no WiFi network joined - only machines on the setup network are reachable.\n");
-    ssh_run(s, user, host, port);
-    return s->closed ? CMD_EXIT : CMD_OK;
+    return ssh_run(s, user, host, port) == 0 ? CMD_OK : CMD_FAIL;
 }
 
 static void fmt_bytes(char *out, size_t cap, uint64_t n)
@@ -582,7 +594,7 @@ static int cmd_vpn(session_t *s, int argc, char **argv)
         vpn_status(&st);
         if (!st.running) {
             tn_puts(s, "The VPN is not running.\n");
-            return CMD_OK;
+            return CMD_FAIL;
         }
         tn_puts(s, "Disconnecting ...\n");
         vpn_stop();
@@ -591,7 +603,7 @@ static int cmd_vpn(session_t *s, int argc, char **argv)
     }
     if ((argc == 2 || argc == 3) && strcmp(argv[1], "up") == 0) {
         if (vpn_start(s, argc == 3 ? argv[2] : "/vpn.ovpn") != 0)
-            return s->closed ? CMD_EXIT : CMD_OK;
+            return CMD_FAIL;
         /* follow the first attempt, so mistakes show up right here */
         vpn_status_t st;
         char last[24] = "";
@@ -614,11 +626,12 @@ static int cmd_vpn(session_t *s, int argc, char **argv)
                 tn_printf(s, "VPN: %s\n", st.error[0] ? st.error : "stopped");
                 if (strcmp(st.state, "reconnecting") == 0)
                     tn_puts(s, "Still trying in the background ('vpn' shows progress, 'vpn down' stops it).\n");
-                return CMD_OK;
+                return CMD_FAIL;
             }
             if (tn_input_ready(s) && tn_getc(s, 0) == 3) {      /* Ctrl-C: stop watching */
                 tn_puts(s, "^C\nStill connecting in the background ('vpn' shows progress).\n");
-                return CMD_OK;
+                s->intr = true;
+                return CMD_FAIL;
             }
             port_sleep_ms(200);
         }
@@ -626,7 +639,7 @@ static int cmd_vpn(session_t *s, int argc, char **argv)
         return CMD_OK;
     }
     tn_puts(s, "usage: vpn [status] | vpn up [file.ovpn] | vpn down\n");
-    return CMD_OK;
+    return CMD_USAGE;
 }
 
 static int cmd_sshkey(session_t *s, int argc, char **argv)
@@ -634,10 +647,10 @@ static int cmd_sshkey(session_t *s, int argc, char **argv)
     char line[160];
     bool regen = argc > 1 && strcmp(argv[1], "new") == 0;
     if (regen && !tn_confirm(s, "Replace this device's SSH key? Servers that trust the old one will stop accepting it."))
-        return CMD_OK;
+        return CMD_FAIL;
     if (sshstore_pubkey_line(line, sizeof line, regen) != 0) {
         tn_puts(s, "Could not create a key.\n");
-        return CMD_OK;
+        return CMD_FAIL;
     }
     tn_printf(s, "This device's public key. To log in without a password, add this line to\n"
                  "~/.ssh/authorized_keys on the machine you connect to:\n\n%s\n\n", line);
@@ -647,14 +660,17 @@ static int cmd_sshkey(session_t *s, int argc, char **argv)
 static int cmd_hosts(session_t *s, int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[1], "forget") == 0) {
-        tn_puts(s, sshstore_host_forget(argv[2]) ? "Forgotten.\n" : "No such entry.\n");
-    } else if (argc == 1) {
+        bool ok = sshstore_host_forget(argv[2]);
+        tn_puts(s, ok ? "Forgotten.\n" : "No such entry.\n");
+        return ok ? CMD_OK : CMD_FAIL;
+    }
+    if (argc == 1) {
         if (sshstore_host_list(s) == 0)
             tn_puts(s, "No hosts remembered yet.\n");
-    } else {
-        tn_puts(s, "usage: hosts | hosts forget <number|name>\n");
+        return CMD_OK;
     }
-    return CMD_OK;
+    tn_puts(s, "usage: hosts | hosts forget <number|name>\n");
+    return CMD_USAGE;
 }
 
 static int cmd_passwd(session_t *s, int argc, char **argv)
@@ -663,18 +679,21 @@ static int cmd_passwd(session_t *s, int argc, char **argv)
     (void)argc;
     (void)argv;
     if (tn_readline(s, "Current password: ", cur, sizeof cur, 0, 60) < 0)
-        return CMD_OK;
+        return CMD_FAIL;
     bool ok = account_check(s->user, cur);
     memset(cur, 0, sizeof cur);
     if (!ok) {
         port_sleep_ms(1500);
         tn_puts(s, "Wrong password.\n");
-        return CMD_OK;
+        return CMD_FAIL;
     }
-    if (read_new_password(s, pass, sizeof pass) == 0)
-        tn_puts(s, account_set_password(pass) == 0 ? "Password changed.\n" : "Could not save the password.\n");
+    int rc = CMD_FAIL;
+    if (read_new_password(s, pass, sizeof pass) == 0) {
+        rc = account_set_password(pass) == 0 ? CMD_OK : CMD_FAIL;
+        tn_puts(s, rc == CMD_OK ? "Password changed.\n" : "Could not save the password.\n");
+    }
     memset(pass, 0, sizeof pass);
-    return CMD_OK;
+    return rc;
 }
 
 static int cmd_reboot(session_t *s, int argc, char **argv)
@@ -684,7 +703,7 @@ static int cmd_reboot(session_t *s, int argc, char **argv)
     tn_puts(s, "Rebooting ...\n");
     port_sleep_ms(500);
     port_reboot();
-    return CMD_EXIT;
+    return logout(s);
 }
 
 static int cmd_factory_reset(session_t *s, int argc, char **argv)
@@ -692,22 +711,21 @@ static int cmd_factory_reset(session_t *s, int argc, char **argv)
     (void)argc;
     (void)argv;
     if (!tn_confirm(s, "This erases the account, the saved WiFi network, known hosts, both SSH keys and\nevery file (your SSH client will warn that this device's host key changed)."))
-        return CMD_OK;
+        return CMD_FAIL;
     tn_puts(s, "Erasing and rebooting ...\n");
     port_log("factory reset requested by %s", s->user);
     port_sleep_ms(500);
     port_fs_wipe();
     port_kv_wipe();
     port_reboot();
-    return CMD_EXIT;
+    return logout(s);
 }
 
-static int cmd_exit(session_t *s, int argc, char **argv)
+static int cmd_exit(session_t *s, int argc, char **argv)   /* logout, quit (exit is the shell's) */
 {
-    (void)s;
     (void)argc;
     (void)argv;
-    return CMD_EXIT;
+    return logout(s);
 }
 
 static const struct {
@@ -721,7 +739,7 @@ static const struct {
     { "free", cmd_free },     { "uname", cmd_uname },    { "uptime", cmd_uptime },
     { "top", cmd_top },       { "htop", cmd_top },       { "ping", cmd_ping },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
-    { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
+    { "factory-reset", cmd_factory_reset },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },
     { "mkdir", cmd_mkdir },   { "rmdir", cmd_rmdir },    { "rm", cmd_rm },
     { "touch", cmd_touch },   { "cat", cmd_cat },        { "cp", cmd_cp },
@@ -806,7 +824,7 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         { "ssh", "", false },            { "ping", "", false },
         { "help", "", false },           { "status", "", false },
         { "passwd", "", false },         { "reboot", "", false },
-        { "factory-reset", "", false },  { "exit", "", false },
+        { "factory-reset", "", false },  { "exit", "", false },  { "echo", "-n", false },
         { "logout", "", false },         { "quit", "", false },
     };
     char tmp[LINE_MAX_], *argv[16];
@@ -818,6 +836,9 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
             if (commands[i].name[0] != '?' && strncmp(commands[i].name, word, strlen(word)) == 0)
                 cand_add(out, commands[i].name);
+        for (int i = 0; sh_builtins[i]; i++)
+            if (strncmp(sh_builtins[i], word, strlen(word)) == 0)
+                cand_add(out, sh_builtins[i]);
         return;
     }
     bool files = true;
@@ -835,20 +856,9 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         fs_complete(s, word, strcmp(argv[0], "cd") == 0 || strcmp(argv[0], "rmdir") == 0, out);
 }
 
-static int run_line(session_t *s, char *line)
+/* One command from the table, by name: its exit status, or -1 if there is no such command. */
+int shell_command(session_t *s, int argc, char **argv)
 {
-    char *argv[16];
-    int argc = split(line, argv, 16);
-    if (argc == -1) {
-        tn_puts(s, "too many arguments\n");
-        return CMD_OK;
-    }
-    if (argc == -2) {
-        tn_puts(s, "missing closing quote\n");
-        return CMD_OK;
-    }
-    if (argc == 0)
-        return CMD_OK;
     for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
         if (strcmp(argv[0], commands[i].name) == 0) {
             if (s->console)
@@ -858,9 +868,10 @@ static int run_line(session_t *s, char *line)
             s->doing[0] = 0;
             return r;
         }
-    tn_printf(s, "%s: unknown command - type 'help'\n", argv[0]);
-    return CMD_OK;
+    return -1;
 }
+
+#define INPUT_MAX 2048    /* one entry at the prompt, continuation lines included */
 
 void session_main(session_t *s)
 {
@@ -889,18 +900,35 @@ void session_main(session_t *s)
     tn_puts(s, "Type 'help' for the list of commands.\n\n");
 
     snprintf(s->cwd, sizeof s->cwd, "/");
-    while (!s->closed) {
+    char *input = malloc(INPUT_MAX);
+    while (input && !s->closed && !s->logout) {
         snprintf(prompt, sizeof prompt, "%s@%s-%s:%s> ", s->user, C3_NAME, id, s->cwd);
         int n = tn_readline(s, prompt, line, sizeof line, RL_ECHO | RL_HISTORY | RL_COMPLETE, C3_IDLE_TIMEOUT_S);
+        /* an unfinished if/while/for or quote: keep reading with "> " */
+        size_t len = n >= 0 ? (size_t)snprintf(input, INPUT_MAX, "%s", line) : 0;
+        while (n >= 0 && sh_incomplete(input)) {
+            n = tn_readline(s, "> ", line, sizeof line, RL_ECHO | RL_HISTORY | RL_COMPLETE, C3_IDLE_TIMEOUT_S);
+            if (n >= 0 && len + 1 + (size_t)n >= INPUT_MAX) {
+                tn_puts(s, "sh: that is too long to type in one go - put it in a file and run it with sh\n");
+                n = TN_INTR;
+            }
+            if (n >= 0) {
+                input[len++] = '\n';
+                memcpy(input + len, line, (size_t)n + 1);
+                len += (size_t)n;
+            }
+        }
         if (n == TN_INTR)
             continue;
         if (n == TN_TIMEOUT)
             tn_puts(s, "\nIdle for too long, logging out.\n");
         if (n < 0)
             break;
-        if (run_line(s, line) == CMD_EXIT)
-            break;
+        s->intr = false;
+        sh_run(s, input);
     }
+    free(input);
+    sh_free(s);
     if (!s->closed)
         tn_puts(s, "Goodbye.\n");
 }

@@ -197,25 +197,26 @@ static int ent_cmp(const void *a, const void *b)
     return strcmp(((const ent_t *)a)->name, ((const ent_t *)b)->name);
 }
 
-static void ls_one(session_t *s, const char *vpath, const char *host, bool lng, bool all, bool header)
+/* 0, or 1 if it could not be listed */
+static int ls_one(session_t *s, const char *vpath, const char *host, bool lng, bool all, bool header)
 {
     struct stat st;
     if (stat(host, &st) != 0) {
         tn_printf(s, "ls: %s: %s\n", vpath, strerror(errno));
-        return;
+        return 1;
     }
     if (!S_ISDIR(st.st_mode)) {
         if (lng)
             tn_printf(s, "-  %8ld  %s\n", (long)st.st_size, base(vpath));
         else
             tn_printf(s, "%s\n", base(vpath));
-        return;
+        return 0;
     }
 
     DIR *d = opendir(host);
     if (!d) {
         tn_printf(s, "ls: %s: %s\n", vpath, strerror(errno));
-        return;
+        return 1;
     }
     int cap = 32, n = 0;
     ent_t *e = malloc(sizeof *e * (size_t)cap);
@@ -241,7 +242,7 @@ static void ls_one(session_t *s, const char *vpath, const char *host, bool lng, 
     }
     closedir(d);
     if (!e)
-        return;
+        return 1;
     qsort(e, (size_t)n, sizeof *e, ent_cmp);
 
     if (header)
@@ -282,28 +283,28 @@ static void ls_one(session_t *s, const char *vpath, const char *host, bool lng, 
         }
     }
     free(e);
+    return 0;
 }
 
 int cmd_ls(session_t *s, int argc, char **argv)
 {
     bool f[128];
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
-    int i = opts(argc, argv, "la", f, s);
+    int i = opts(argc, argv, "la", f, s), rc = 0;
     if (i < 0)
-        return 0;
-    if (i == argc) {
-        if (path_of(s, "ls", ".", v, h) == 0)
-            ls_one(s, v, h, f['l'], f['a'], false);
-        return 0;
-    }
+        return 2;
+    if (i == argc)
+        return path_of(s, "ls", ".", v, h) == 0 ? ls_one(s, v, h, f['l'], f['a'], false) : 1;
     for (int j = i; j < argc; j++) {
         if (path_of(s, "ls", argv[j], v, h) == 0) {
-            ls_one(s, v, h, f['l'], f['a'], argc - i > 1 && is_dir(h));
+            rc |= ls_one(s, v, h, f['l'], f['a'], argc - i > 1 && is_dir(h));
             if (j + 1 < argc && argc - i > 1 && is_dir(h))
                 tn_puts(s, "\n");
+        } else {
+            rc = 1;
         }
     }
-    return 0;
+    return rc;
 }
 
 int cmd_cd(session_t *s, int argc, char **argv)
@@ -311,16 +312,19 @@ int cmd_cd(session_t *s, int argc, char **argv)
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
     if (argc > 2) {
         tn_puts(s, "usage: cd [directory]\n");
-        return 0;
+        return 2;
     }
     if (path_of(s, "cd", argc > 1 ? argv[1] : "/", v, h) != 0)
-        return 0;
-    if (!exists(h))
+        return 1;
+    if (!exists(h)) {
         tn_printf(s, "cd: %s: No such file or directory\n", argv[1]);
-    else if (!is_dir(h))
+        return 1;
+    }
+    if (!is_dir(h)) {
         tn_printf(s, "cd: %s: Not a directory\n", argv[1]);
-    else
-        snprintf(s->cwd, sizeof s->cwd, "%s", v);
+        return 1;
+    }
+    snprintf(s->cwd, sizeof s->cwd, "%s", v);
     return 0;
 }
 
@@ -354,37 +358,46 @@ int cmd_mkdir(session_t *s, int argc, char **argv)
 {
     bool f[128];
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
-    int i = opts(argc, argv, "p", f, s);
+    int i = opts(argc, argv, "p", f, s), rc = 0;
     if (i < 0)
-        return 0;
-    if (i == argc)
+        return 2;
+    if (i == argc) {
         tn_puts(s, "usage: mkdir [-p] directory...\n");
-    for (; i < argc; i++) {
-        if (path_of(s, "mkdir", argv[i], v, h) != 0)
-            continue;
-        int r = f['p'] ? mkdir_p(h) : (mkdir(h, 0755) == 0 ? 0 : -errno);
-        if (r < 0)
-            tn_printf(s, "mkdir: %s: %s\n", argv[i], strcmp(v, "/") == 0 ? "File exists" : strerror(-r));
+        return 2;
     }
-    return 0;
+    for (; i < argc; i++) {
+        if (path_of(s, "mkdir", argv[i], v, h) != 0) {
+            rc = 1;
+            continue;
+        }
+        int r = f['p'] ? mkdir_p(h) : (mkdir(h, 0755) == 0 ? 0 : -errno);
+        if (r < 0) {
+            tn_printf(s, "mkdir: %s: %s\n", argv[i], strcmp(v, "/") == 0 ? "File exists" : strerror(-r));
+            rc = 1;
+        }
+    }
+    return rc;
 }
 
 int cmd_rmdir(session_t *s, int argc, char **argv)
 {
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
-    if (argc < 2)
+    int rc = 0;
+    if (argc < 2) {
         tn_puts(s, "usage: rmdir directory...\n");
+        return 2;
+    }
     for (int i = 1; i < argc; i++) {
         if (path_of(s, "rmdir", argv[i], v, h) != 0)
-            continue;
-        if (strcmp(v, "/") == 0)
-            tn_printf(s, "rmdir: %s: cannot remove the root directory\n", argv[i]);
+            rc = 1;
+        else if (strcmp(v, "/") == 0)
+            rc = 1, tn_printf(s, "rmdir: %s: cannot remove the root directory\n", argv[i]);
         else if (!is_dir(h))
-            tn_printf(s, "rmdir: %s: %s\n", argv[i], exists(h) ? "Not a directory" : "No such file or directory");
+            rc = 1, tn_printf(s, "rmdir: %s: %s\n", argv[i], exists(h) ? "Not a directory" : "No such file or directory");
         else if (rmdir(h) != 0)
-            tn_printf(s, "rmdir: %s: %s\n", argv[i], errno == EEXIST ? "Directory not empty" : strerror(errno));
+            rc = 1, tn_printf(s, "rmdir: %s: %s\n", argv[i], errno == EEXIST ? "Directory not empty" : strerror(errno));
     }
-    return 0;
+    return rc;
 }
 
 /* Remove a directory tree. Names are gathered before deleting anything, so
@@ -424,72 +437,99 @@ int cmd_rm(session_t *s, int argc, char **argv)
 {
     bool f[128];
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
-    int i = opts(argc, argv, "rRf", f, s);
+    int i = opts(argc, argv, "rRf", f, s), rc = 0;
     bool rec = f['r'] || f['R'];
     if (i < 0)
-        return 0;
-    if (i == argc && !f['f'])
+        return 2;
+    if (i == argc && !f['f']) {
         tn_puts(s, "usage: rm [-r] [-f] file...\n");
+        return 2;
+    }
     for (; i < argc; i++) {
-        if (path_of(s, "rm", argv[i], v, h) != 0)
+        if (path_of(s, "rm", argv[i], v, h) != 0) {
+            rc = 1;
             continue;
+        }
         if (strcmp(v, "/") == 0) {
             tn_puts(s, "rm: refusing to remove '/'\n");
+            rc = 1;
             continue;
         }
         if (strncmp(s->cwd, v, strlen(v)) == 0 && (s->cwd[strlen(v)] == 0 || s->cwd[strlen(v)] == '/')) {
             tn_printf(s, "rm: %s: you are inside it - cd somewhere else first\n", argv[i]);
+            rc = 1;
             continue;
         }
         if (!exists(h)) {
-            if (!f['f'])
+            if (!f['f']) {                  /* rm -f: a missing file is not an error */
                 tn_printf(s, "rm: %s: No such file or directory\n", argv[i]);
+                rc = 1;
+            }
             continue;
         }
         if (is_dir(h) && !rec) {
             tn_printf(s, "rm: %s: is a directory (use rm -r)\n", argv[i]);
+            rc = 1;
             continue;
         }
         int r = rm_tree(h, 0);
-        if (r < 0)
+        if (r < 0) {
             tn_printf(s, "rm: %s: %s\n", argv[i], strerror(-r));
+            rc = 1;
+        }
     }
-    return 0;
+    return rc;
 }
 
 int cmd_touch(session_t *s, int argc, char **argv)
 {
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
-    if (argc < 2)
+    int rc = 0;
+    if (argc < 2) {
         tn_puts(s, "usage: touch file...\n");
+        return 2;
+    }
     for (int i = 1; i < argc; i++) {
-        if (path_of(s, "touch", argv[i], v, h) != 0 || exists(h))
+        if (path_of(s, "touch", argv[i], v, h) != 0) {
+            rc = 1;
+            continue;
+        }
+        if (exists(h))
             continue;
         int fd = open(h, O_WRONLY | O_CREAT, 0644);
-        if (fd < 0)
+        if (fd < 0) {
             tn_printf(s, "touch: %s: %s\n", argv[i], strerror(errno));
-        else
+            rc = 1;
+        } else {
             close(fd);
+        }
     }
-    return 0;
+    return rc;
 }
 
 int cmd_cat(session_t *s, int argc, char **argv)
 {
     char v[C3_PATH_MAX], h[C3_HOST_MAX];
     uint8_t in[256], out[512];
-    if (argc < 2)
+    int rc = 0;
+    if (argc < 2) {
         tn_puts(s, "usage: cat file...\n");
+        return 2;
+    }
     for (int i = 1; i < argc && !s->closed; i++) {
-        if (path_of(s, "cat", argv[i], v, h) != 0)
+        if (path_of(s, "cat", argv[i], v, h) != 0) {
+            rc = 1;
             continue;
+        }
         if (is_dir(h)) {
             tn_printf(s, "cat: %s: Is a directory\n", argv[i]);
+            rc = 1;
             continue;
         }
         int fd = open(h, O_RDONLY);
         if (fd < 0) {
             tn_printf(s, "cat: %s: %s\n", argv[i], strerror(errno));
+            rc = 1;
             continue;
         }
         ssize_t n;
@@ -497,7 +537,7 @@ int cmd_cat(session_t *s, int argc, char **argv)
         while ((n = read(fd, in, sizeof in)) > 0 && !s->closed) {
             int o = 0;
             for (ssize_t k = 0; k < n; k++) {
-                if (in[k] == '\n' && last != '\r')
+                if (in[k] == '\n' && last != '\r' && !s->redir)   /* CR for the terminal, not a file */
                     out[o++] = '\r';
                 out[o++] = last = in[k];
             }
@@ -505,7 +545,7 @@ int cmd_cat(session_t *s, int argc, char **argv)
         }
         close(fd);
     }
-    return 0;
+    return rc;
 }
 
 static int copy_file(const char *from, const char *to)
@@ -537,30 +577,32 @@ int cmd_cp(session_t *s, int argc, char **argv)
     char sv[C3_PATH_MAX], sh[C3_HOST_MAX], dv[C3_PATH_MAX], dh[C3_HOST_MAX];
     if (argc != 3) {
         tn_puts(s, "usage: cp source destination\n");
-        return 0;
+        return 2;
     }
     if (path_of(s, "cp", argv[1], sv, sh) || path_of(s, "cp", argv[2], dv, dh))
-        return 0;
+        return 1;
     if (!exists(sh)) {
         tn_printf(s, "cp: %s: No such file or directory\n", argv[1]);
-        return 0;
+        return 1;
     }
     if (is_dir(sh)) {
         tn_printf(s, "cp: %s: is a directory (not supported)\n", argv[1]);
-        return 0;
+        return 1;
     }
     target_in(s, sv, dv, dh);
     if (strlen(dv) >= C3_PATH_MAX - 1) {
         tn_puts(s, "cp: destination path too long\n");
-        return 0;
+        return 1;
     }
     if (strcmp(sv, dv) == 0) {
         tn_printf(s, "cp: %s and %s are the same file\n", argv[1], argv[2]);
-        return 0;
+        return 1;
     }
     int r = copy_file(sh, dh);
-    if (r < 0)
+    if (r < 0) {
         tn_printf(s, "cp: %s: %s\n", argv[2], strerror(-r));
+        return 1;
+    }
     return 0;
 }
 
@@ -569,39 +611,41 @@ int cmd_mv(session_t *s, int argc, char **argv)
     char sv[C3_PATH_MAX], sh[C3_HOST_MAX], dv[C3_PATH_MAX], dh[C3_HOST_MAX];
     if (argc != 3) {
         tn_puts(s, "usage: mv source destination\n");
-        return 0;
+        return 2;
     }
     if (path_of(s, "mv", argv[1], sv, sh) || path_of(s, "mv", argv[2], dv, dh))
-        return 0;
+        return 1;
     if (strcmp(sv, "/") == 0 || !exists(sh)) {
         tn_printf(s, "mv: %s: %s\n", argv[1], exists(sh) ? "cannot move the root directory" : "No such file or directory");
-        return 0;
+        return 1;
     }
     target_in(s, sv, dv, dh);
     if (strlen(dv) >= C3_PATH_MAX - 1) {
         tn_puts(s, "mv: destination path too long\n");
-        return 0;
+        return 1;
     }
     size_t sl = strlen(sv);
     if (strncmp(dv, sv, sl) == 0 && (dv[sl] == '/' || dv[sl] == 0)) {
         if (dv[sl] == 0)
             return 0;                       /* moved onto itself */
         tn_printf(s, "mv: cannot move %s into itself\n", argv[1]);
-        return 0;
+        return 1;
     }
     if (exists(dh)) {
         if (is_dir(dh)) {
             tn_printf(s, "mv: %s: a directory with that name exists\n", dv);
-            return 0;
+            return 1;
         }
         if (is_dir(sh)) {
             tn_printf(s, "mv: %s: a file with that name exists\n", dv);
-            return 0;
+            return 1;
         }
         unlink(dh);                         /* replacing a file, like mv does */
     }
-    if (rename(sh, dh) != 0)
+    if (rename(sh, dh) != 0) {
         tn_printf(s, "mv: %s: %s\n", argv[1], strerror(errno));
+        return 1;
+    }
     return 0;
 }
 
@@ -655,7 +699,7 @@ int cmd_df(session_t *s, int argc, char **argv)
     (void)argv;
     if (port_fs_usage(&total, &used) != 0 || total <= 0) {
         tn_puts(s, "df: file area not available\n");
-        return 0;
+        return 1;
     }
     tn_printf(s, "%ld KB used of %ld KB (%ld%%), %ld KB free\n", used / 1024, total / 1024, used * 100 / total,
               (total - used) / 1024);

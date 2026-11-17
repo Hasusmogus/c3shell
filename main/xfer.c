@@ -1077,25 +1077,25 @@ int cmd_scp(session_t *s, int argc, char **argv)
     if (nops < 2 || port < 1 || port > 65535) {
         tn_puts(s, "usage: scp [-r] [-P port] file... [user@]host:[path]   (upload)\n"
                    "       scp [-r] [-P port] [user@]host:path [local]    (download)\n");
-        return 0;
+        return 2;
     }
     bool up = remote_spec(argv[argc - 1], &ruser, &rhost, &rpath);
     if (!up) {
         if (nops != 2 || !remote_spec(argv[first], &ruser, &rhost, &rpath)) {
             tn_puts(s, "scp: one side must be remote ([user@]host:path), the other local\n");
-            return 0;
+            return 2;
         }
     } else {
         for (int i = first; i < argc - 1; i++) {
             if (strchr(argv[i], ':') && !strchr(argv[i], '/')) {
                 tn_puts(s, "scp: copying between two remote machines is not supported\n");
-                return 0;
+                return 2;
             }
         }
     }
     if (strlen(rpath) > C3_PATH_MAX * 2 || !shell_quote(q, sizeof q, rpath)) {
         tn_puts(s, "scp: remote path too long\n");
-        return 0;
+        return 1;
     }
     if (ruser)
         snprintf(user, sizeof user, "%s", ruser);
@@ -1108,7 +1108,7 @@ int cmd_scp(session_t *s, int argc, char **argv)
         int r = fs_resolve(s, nops == 2 ? argv[argc - 1] : ".", local, sizeof local);
         if (r < 0) {
             tn_printf(s, "scp: %s: %s\n", argv[argc - 1], strerror(-r));
-            return 0;
+            return 1;
         }
     }
 
@@ -1119,12 +1119,12 @@ int cmd_scp(session_t *s, int argc, char **argv)
 
     sshc_t *c = sshc_open(s, user, rhost, port, cmd);
     if (!c)
-        return s->closed;
+        return 1;
     xs_t *x = calloc(1, sizeof *x);
     if (!x) {
         sshc_close(c);
         tn_puts(s, "scp: out of memory\n");
-        return 0;
+        return 1;
     }
     x->s = s;
     x->c = c;
@@ -1157,7 +1157,8 @@ int cmd_scp(session_t *s, int argc, char **argv)
     int st = sshc_exit_status(c);
     if (st != 0 && !x->failed)
         tn_printf(s, "scp: the remote scp exited with status %d\n", st);
+    int rc = st != 0 || x->failed ? 1 : 0;
     sshc_close(c);
     free(x);
-    return s->closed;
+    return rc;
 }
