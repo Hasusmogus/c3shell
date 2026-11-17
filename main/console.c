@@ -149,6 +149,6 @@ void console_start(void)
     console_fd = port_console_open();
     if (console_fd < 0)
         return;
-    if (port_thread_start("console-wait", 3072, console_getty, NULL) != 0)
+    if (port_thread_start("console-wait", 2048, console_getty, NULL) != 0)
         port_log("console: cannot start");
 }

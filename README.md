@@ -142,6 +142,8 @@ network. On a factory-new board, Enter starts the account setup instead.
     vi [file]                 edit a file
     status                    network, sessions, memory
     free [-b | -k | -h]       memory: total, used, free, largest block, lowest free
+    uname [-asnrvmo]          system name, version, machine
+    uptime [-p]               time since boot, users, average CPU use
     fetch [--plain]           system summary with a logo, fastfetch-style
     top [-d secs]             live view of tasks, CPU, memory, sessions (q quits)
     passwd                    change your password

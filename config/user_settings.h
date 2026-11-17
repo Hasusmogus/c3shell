@@ -19,6 +19,9 @@
 #define NO_MAIN_DRIVER
 #define NO_ASN_TIME
 #define WOLFSSL_SMALL_STACK
+/* ...but a hash keeps its working buffer for its lifetime instead of a
+ * malloc/free per block: password hashing alone is ~12,000 blocks a login */
+#define WOLFSSL_SMALL_STACK_CACHE
 #define WOLFSSL_IGNORE_FILE_WARN
 
 #define NO_DH

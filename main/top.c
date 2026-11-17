@@ -24,9 +24,9 @@ typedef struct {
     int         n;
     int         cols, rows, row, col;
     /* the previous sample, for CPU deltas */
-    struct { uint32_t id, runtime; } prev[TOP_TASKS];
+    struct { uint32_t id; uint64_t runtime; } prev[TOP_TASKS];
     int         nprev;
-    uint32_t    prev_us;
+    uint64_t    prev_us;
     bool        have_prev, measured;
     port_task_t cur[TOP_TASKS];
     row_t       task[TOP_TASKS];
@@ -189,9 +189,9 @@ static void sort_tasks(top_t *t)
 
 static void sample(top_t *t)
 {
-    uint32_t now = 0;
+    uint64_t now = 0;
     int n = port_tasks(t->cur, TOP_TASKS, &now);
-    uint32_t dt = now - t->prev_us;
+    uint64_t dt = now - t->prev_us;
     float idle = 0, busy = 0;
     bool have_idle = false;
 

@@ -12,7 +12,7 @@
 #define C3_AP_PASSWORD     "c3shell-setup"
 
 #define C3_MAX_SESSIONS    3          /* simultaneous SSH connections, including ones still logging in */
-#define C3_SESSION_STACK   (24 * 1024)
+#define C3_SESSION_STACK   (20 * 1024)  /* deepest seen: ~5 KB on the chip; ~16 KB in the x86 simulator, where glibc's resolver is deep */
 #define C3_IDLE_TIMEOUT_S  900        /* at the prompt; not during ssh */
 #define C3_LOGIN_GRACE_S   60         /* a connection must finish logging in within this */
 #define C3_GUARD_FAILS     5          /* wrong passwords from one address before it is blocked ... */

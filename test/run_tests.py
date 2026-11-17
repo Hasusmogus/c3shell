@@ -291,15 +291,33 @@ def t_shell(c):
     t.line("free")
     out = t.expect(PROMPT)
     assert re.search(r"total\s+used\s+free\s+largest\s+min free", out) and "Mem:" in out, out
-    assert re.search(r"Stack:\s+24\s+\d+\s+\d+", out), out        # this session's 24 KB stack, in KB
+    assert re.search(r"Stack:\s+\d+\s+\d+\s+\d+", out), out        # this session's own stack, in KB
     t.send("free -\t\t")                              # options: the second Tab lists them
     out = t.expect("-k")
     assert "-b" in out and "-h" in out, out
     t.send("\x15free -h\r")                           # (the Ctrl-U redraw shows a prompt too)
-    t.expect(r"Stack:\s+24\.0K")
+    t.expect(r"Stack:\s+\d+\.0K")
     t.expect(PROMPT)
     t.line("free -x")
     t.expect("usage: free")
+    t.expect(PROMPT)
+    t.line("uname")
+    t.expect("\r\nc3shell\r\n")
+    t.expect(PROMPT)
+    t.line("uname -a")
+    out = t.expect(PROMPT)
+    assert re.search(r"c3shell c3shell-51M0 \d+\.\d+ simulator on Linux \S+ \S+ Linux\r\n", out), out
+    t.line("uname -nr -m")
+    out = t.expect(PROMPT)
+    assert re.search(r"\r\nc3shell-51M0 \d+\.\d+ \S+\r\n", out), out
+    t.line("uname -x")
+    t.expect("usage: uname")
+    t.expect(PROMPT)
+    t.line("uptime")
+    out = t.expect(PROMPT)
+    assert re.search(r"up \d\d:\d\d:\d\d,  \d+ users?,  CPU \d+\.\d% average since boot", out), out
+    t.line("uptime -p")
+    t.expect(r"up \d+ minutes?\r\n")
     t.expect(PROMPT)
     t.line("top")
     out = t.expect("STACK FREE")
@@ -967,6 +985,11 @@ def t_xfer_in(c):
     rc, out = run("scp", "-O", "-r", "admin@127.0.0.1:/tree", f"{d}/tree2")
     assert rc == 0, out
     assert open(f"{d}/back1", "rb").read() == blob, "download corrupted"
+    # Files arrive with the permissions the device lists (rw-r--r--), whatever the
+    # file area keeps: on the chip LittleFS keeps none, which once made downloads unreadable.
+    os.chmod(os.path.join(d, "state", "fs", "classic.bin"), 0o600)
+    rc, out = run("scp", "admin@127.0.0.1:/classic.bin", f"{d}/back3")
+    assert rc == 0 and os.stat(f"{d}/back3").st_mode & 0o777 == 0o644, (oct(os.stat(f"{d}/back3").st_mode), out)
     assert open(f"{d}/tree2/sub/b.txt").read() == "beta\n"
     t.line("ls -l / tree/sub")
     out = t.expect(PROMPT)

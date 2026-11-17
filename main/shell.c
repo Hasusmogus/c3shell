@@ -96,6 +96,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  vi [file]                 edit a file (:wq saves and quits, :q! discards)\n"
             "  status                    network, sessions, memory\n"
             "  free [-b | -k | -h]       memory: total, used, free, largest block, lowest free\n"
+            "  uname [-asnrvmo]          system name, version, machine   uptime [-p]  time since boot\n"
             "  fetch [--plain]           system summary with a logo, fastfetch-style\n"
             "  top [-d secs]             live view of tasks, CPU, memory, sessions (q quits)\n"
             "  passwd                    change your password\n"
@@ -187,6 +188,99 @@ static int cmd_free(session_t *s, int argc, char **argv)
     }
     if (fr < 0)
         tn_puts(s, "(the simulator has no fixed heap to report on)\n");
+    return CMD_OK;
+}
+
+/* uname: like the usual one. -s c3shell, -n c3shell-XXXX, -r version,
+ * -v what it was built with, -m machine, -o operating system. */
+static int cmd_uname(session_t *s, int argc, char **argv)
+{
+    const char *order = "snrvmo";
+    char want[8] = "s", id[5], node[16], line[192] = "";
+    port_sysinfo_t si;
+
+    if (argc > 1) {
+        want[0] = 0;
+        for (int i = 1; i < argc; i++) {
+            const char *a = argv[i];
+            if (a[0] != '-' || !a[1] || strspn(a + 1, "asnrvmo") != strlen(a + 1)) {
+                tn_puts(s, "usage: uname [-asnrvmo]\n");
+                return CMD_OK;
+            }
+            for (a++; *a; a++)
+                if (!strchr(want, *a) && strlen(want) < sizeof want - 1)
+                    strncat(want, a, 1);
+        }
+    }
+    port_device_id(id);
+    port_sysinfo(&si);
+    snprintf(node, sizeof node, "%s-%s", C3_NAME, id);
+    for (const char *f = order; *f; f++) {
+        if (!strchr(want, *f) && !strchr(want, 'a'))
+            continue;
+        const char *v = *f == 's' ? C3_NAME : *f == 'n' ? node : *f == 'r' ? C3_VERSION
+                      : *f == 'v' ? si.sdk : *f == 'm' ? si.machine : si.os;
+        size_t l = strlen(line);
+        snprintf(line + l, sizeof line - l, "%s%s", l ? " " : "", v);
+    }
+    tn_printf(s, "%s\n", line);
+    return CMD_OK;
+}
+
+/* uptime: there is no clock, so no time of day; instead of a load average,
+ * the CPU's average use since boot (from the tasks' run-time counters). */
+static int cmd_uptime(session_t *s, int argc, char **argv)
+{
+    bool pretty = argc == 2 && strcmp(argv[1], "-p") == 0;
+    uint32_t up = port_uptime_s();
+    unsigned d = up / 86400, h = up / 3600 % 24, m = up / 60 % 60;
+    char out[160];
+    int n;
+
+    if (argc > 1 && !pretty) {
+        tn_puts(s, "usage: uptime [-p]\n");
+        return CMD_OK;
+    }
+    if (pretty) {
+        n = snprintf(out, sizeof out, "up");
+        if (d)
+            n += snprintf(out + n, sizeof out - (size_t)n, " %u day%s,", d, d == 1 ? "" : "s");
+        if (d || h)
+            n += snprintf(out + n, sizeof out - (size_t)n, " %u hour%s,", h, h == 1 ? "" : "s");
+        n += snprintf(out + n, sizeof out - (size_t)n, " %u minute%s", m, m == 1 ? "" : "s");
+        tn_printf(s, "%s\n", out);
+        return CMD_OK;
+    }
+    if (d)
+        n = snprintf(out, sizeof out, "up %u day%s, %02u:%02u:%02u", d, d == 1 ? "" : "s", h, m, (unsigned)(up % 60));
+    else
+        n = snprintf(out, sizeof out, "up %02u:%02u:%02u", h, m, (unsigned)(up % 60));
+    sess_info_t ss[C3_MAX_SESSIONS + 1];
+    int users = server_sessions(ss, C3_MAX_SESSIONS + 1);
+    n += snprintf(out + n, sizeof out - (size_t)n, ",  %d user%s", users, users == 1 ? "" : "s");
+
+    port_task_t *tk = malloc(40 * sizeof *tk);
+    uint64_t now = 0, idle = 0, busy = 0;
+    bool have_idle = false, measured = false;
+    int nt = tk ? port_tasks(tk, 40, &now) : -1;
+    for (int i = 0; i < nt; i++) {
+        measured |= tk[i].runtime != 0;
+        if (strncmp(tk[i].name, "IDLE", 4) == 0) {
+            idle += tk[i].runtime;
+            have_idle = true;
+        } else {
+            busy += tk[i].runtime;
+        }
+    }
+    free(tk);
+    /* all zero with an idle task = counters not kept (no run-time stats); without
+     * one (the simulator) it just means nothing has used a full tick yet */
+    if (nt > 0 && now > 0 && (measured || !have_idle)) {
+        if (have_idle)                     /* on the chip: whatever the idle task did not get */
+            busy = idle < now ? now - idle : 0;
+        snprintf(out + n, sizeof out - (size_t)n, ",  CPU %.1f%% average since boot", (double)busy * 100.0 / (double)now);
+    }
+    tn_printf(s, "%s\n", out);
     return CMD_OK;
 }
 
@@ -624,7 +718,7 @@ static const struct {
     { "ssh", cmd_ssh },       { "sshkey", cmd_sshkey },  { "hosts", cmd_hosts },
     { "scp", cmd_scp },       { "vpn", cmd_vpn },
     { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
-    { "free", cmd_free },
+    { "free", cmd_free },     { "uname", cmd_uname },    { "uptime", cmd_uptime },
     { "top", cmd_top },       { "htop", cmd_top },       { "ping", cmd_ping },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },              { "exit", cmd_exit },
@@ -704,7 +798,8 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         { "wifi", "forget", false },     { "vpn", "up down status", false },
         { "hosts", "forget", false },    { "sshkey", "new", false },
         { "fetch", "--plain", false },   { "neofetch", "--plain", false },
-        { "free", "-b -k -h", false },
+        { "free", "-b -k -h", false },   { "uname", "-a -s -n -r -v -m -o", false },
+        { "uptime", "-p", false },
         { "top", "-d", false },          { "htop", "-d", false },
         { "ls", "-l -a", true },         { "rm", "-r -f", true },
         { "mkdir", "-p", true },         { "scp", "-r -P", true },

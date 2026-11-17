@@ -621,7 +621,9 @@ static void pattrs(sftp_t *f, const struct stat *st)
 {
     p32(f, A_SIZE | A_PERM | A_TIME);
     p64(f, (uint64_t)st->st_size);
-    p32(f, (uint32_t)st->st_mode);
+    /* the same permissions as the long listing shows: LittleFS keeps none
+     * (st_mode is just the file type), and clients apply what they are sent */
+    p32(f, (uint32_t)((st->st_mode & S_IFMT) | (S_ISDIR(st->st_mode) ? 0755 : 0644)));
     p32(f, (uint32_t)st->st_mtime);
     p32(f, (uint32_t)st->st_mtime);
 }

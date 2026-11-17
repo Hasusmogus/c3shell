@@ -106,12 +106,11 @@ int port_icmp_socket(bool *with_ip_header)
 }   /* the log has its own terminal here */
 
 /* The simulator's threads, from /proc: CPU time is real host CPU time. */
-int port_tasks(port_task_t *out, int max, uint32_t *now_us)
+int port_tasks(port_task_t *out, int max, uint64_t *now_us)
 {
     DIR *d = opendir("/proc/self/task");
     struct dirent *e;
     long hz = sysconf(_SC_CLK_TCK);
-    struct timespec ts;
     int k = 0;
     if (!d)
         return -1;
@@ -140,12 +139,11 @@ int port_tasks(port_task_t *out, int max, uint32_t *now_us)
         t->state = st == 'D' ? 'S' : st;
         t->prio = (uint8_t)(prio < 0 ? 0 : prio > 255 ? 255 : prio);
         t->id = (uint32_t)atol(e->d_name);
-        t->runtime = (uint32_t)((uint64_t)(ut + sy) * 1000000u / (uint64_t)hz);
+        t->runtime = (uint64_t)(ut + sy) * 1000000u / (uint64_t)hz;
         t->stack_free = -1;
     }
     closedir(d);
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    *now_us = (uint32_t)((uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u);
+    *now_us = (uint64_t)(now_s() * 1e6);    /* since the virtual device started */
     return k;
 }
 
@@ -177,6 +175,11 @@ void port_sysinfo(port_sysinfo_t *o)
     snprintf(o->cpu, sizeof o->cpu, "%s (%ld thread%s, host)", model, n, n == 1 ? "" : "s");
     o->flash_kb = -1;
     o->heap_total = -1;
+    struct utsname h;
+    bool ok = uname(&h) == 0;
+    snprintf(o->machine, sizeof o->machine, "%.15s", ok ? h.machine : "unknown");
+    snprintf(o->os, sizeof o->os, "Linux");
+    snprintf(o->sdk, sizeof o->sdk, "simulator on Linux %.28s", ok ? h.release : "");
 }
 
 void port_log(const char *fmt, ...)

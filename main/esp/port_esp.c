@@ -126,7 +126,7 @@ long port_free_heap(void) { return (long)esp_get_free_heap_size(); }
 long port_stack_headroom(void) { return (long)uxTaskGetStackHighWaterMark(NULL); }
 int  port_listen_port(void) { return 22; }
 
-int port_tasks(port_task_t *out, int max, uint32_t *now_us)
+int port_tasks(port_task_t *out, int max, uint64_t *now_us)
 {
 #if CONFIG_FREERTOS_USE_TRACE_FACILITY
     UBaseType_t cap = uxTaskGetNumberOfTasks() + 4;
@@ -149,7 +149,7 @@ int port_tasks(port_task_t *out, int max, uint32_t *now_us)
         t->prio = (uint8_t)ts[i].uxCurrentPriority;
         t->id = (uint32_t)ts[i].xTaskNumber;
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-        t->runtime = (uint32_t)ts[i].ulRunTimeCounter;
+        t->runtime = (uint64_t)ts[i].ulRunTimeCounter;
 #else
         t->runtime = 0;
 #endif
@@ -157,9 +157,9 @@ int port_tasks(port_task_t *out, int max, uint32_t *now_us)
     }
     free(ts);
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    *now_us = (uint32_t)total;          /* the run-time clock is esp_timer, in microseconds */
+    *now_us = (uint64_t)total;          /* the run-time clock is esp_timer: microseconds since boot */
 #else
-    *now_us = (uint32_t)esp_timer_get_time();
+    *now_us = (uint64_t)esp_timer_get_time();
 #endif
     return k;
 #else
@@ -187,6 +187,9 @@ void port_sysinfo(port_sysinfo_t *o)
              (unsigned)esp_rom_get_cpu_ticks_per_us());
     o->flash_kb = esp_flash_get_size(NULL, &flash) == ESP_OK ? (long)(flash / 1024) : -1;
     o->heap_total = (long)heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
+    snprintf(o->machine, sizeof o->machine, "riscv32");
+    snprintf(o->os, sizeof o->os, "FreeRTOS");
+    snprintf(o->sdk, sizeof o->sdk, "ESP-IDF %s", esp_get_idf_version());
 }
 
 void port_reboot(void)

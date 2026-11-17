@@ -36,8 +36,11 @@ typedef struct {
     char cpu[96];                     /* e.g. "RISC-V, 1 core @ 160 MHz" */
     long flash_kb;                    /* -1 if unknown */
     long heap_total;                  /* bytes, -1 if unknown */
+    char machine[16];                 /* uname -m: "riscv32" */
+    char os[16];                      /* uname -o: "FreeRTOS" */
+    char sdk[48];                     /* uname -v: what it was built with, "ESP-IDF v6.1.0" */
 } port_sysinfo_t;
-void     port_sysinfo(port_sysinfo_t *out);  /* for 'fetch' */
+void     port_sysinfo(port_sysinfo_t *out);  /* for 'fetch' and 'uname' */
 
 /* ---- what 'top' shows ---- */
 typedef struct {
@@ -45,10 +48,10 @@ typedef struct {
     char     state;                   /* like ps: R runnable, S sleeping/waiting, other letters rare */
     uint8_t  prio;
     uint32_t id;                      /* stable while the task lives */
-    uint32_t runtime;                 /* CPU time used so far, microseconds, wraps; 0 = not measured */
+    uint64_t runtime;                 /* CPU time used since boot, microseconds; 0 = not measured */
     long     stack_free;              /* bytes of stack never used, -1 if unknown */
 } port_task_t;
-int  port_tasks(port_task_t *out, int max, uint32_t *now_us); /* count or -1; now_us on runtime's clock */
+int  port_tasks(port_task_t *out, int max, uint64_t *now_us); /* count or -1; now_us: microseconds since boot */
 void port_heap(long *free_now, long *min_free, long *largest); /* bytes, -1 where unknown */
 bool     port_sock_via_ap(int fd);    /* did this client arrive over the setup network? */
 /* A TCP connection through the VPN tunnel as an ordinary socket fd. On the chip
