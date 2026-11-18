@@ -90,6 +90,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  ssh [user@]host [-p port] open a shell on another machine\n"
             "  ping [-c n] [-i s] [-W s] host   check that a machine answers (Ctrl-C stops)\n"
             "  ip [-s] addr|route|link   interfaces, addresses, routes (-s: traffic counters)\n"
+            "  traceroute host           the routers on the way there (also: tracert)\n"
             "                            (hang up a stuck one with ~. on a new line; ~~. from OpenSSH)\n"
             "  scp [-r] [-P port] from... to   copy files to/from another machine,\n"
             "                            e.g. scp notes.txt me@pc:  or  scp me@pc:work.ovpn .\n"
@@ -739,7 +740,7 @@ static const struct {
     { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
     { "free", cmd_free },     { "uname", cmd_uname },    { "uptime", cmd_uptime },
     { "top", cmd_top },       { "htop", cmd_top },       { "ping", cmd_ping },
-    { "ip", cmd_ip },
+    { "ip", cmd_ip },         { "traceroute", cmd_traceroute }, { "tracert", cmd_traceroute },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },
@@ -824,6 +825,7 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         { "ls", "-l -a", true },         { "rm", "-r -f", true },
         { "mkdir", "-p", true },         { "scp", "-r -P", true },
         { "ssh", "", false },            { "ping", "", false },
+        { "traceroute", "-m -q -w", false }, { "tracert", "-m -q -w", false },
         { "help", "", false },           { "status", "", false },
         { "passwd", "", false },         { "reboot", "", false },
         { "factory-reset", "", false },  { "exit", "", false },  { "echo", "-n", false },

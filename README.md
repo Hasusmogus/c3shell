@@ -129,6 +129,8 @@ network. On a factory-new board, Enter starts the account setup instead.
     ping [-c n] [-i s] [-W s] host
                               check that a machine answers (Ctrl-C stops)
     ip [-s] addr|route|link   interfaces, addresses, routes (-s: traffic counters)
+    traceroute [-m hops] [-q probes] [-w secs] host
+                              the routers on the way there (also: tracert)
     scp [-r] [-P port] from... to
                               copy files to/from another machine
     vpn up [file.ovpn]        connect to an OpenVPN server (default /vpn.ovpn)

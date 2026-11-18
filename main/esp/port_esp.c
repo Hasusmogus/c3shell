@@ -306,11 +306,62 @@ void port_console_quiet(bool quiet)
     log_quiet = quiet;
 }
 
-/* lwIP raw socket: routed like everything else, so also through the VPN */
-int port_icmp_socket(bool *with_ip_header)
+/* lwIP raw socket: routed like everything else, so also through the VPN. It
+ * sees every ICMP message, IP header first, errors quoting what they answer. */
+int port_icmp_socket(void)
 {
-    *with_ip_header = true;
     return socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+}
+
+int port_icmp_ttl(int fd, int ttl)
+{
+    return setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof ttl);
+}
+
+int port_icmp_recv(int fd, int timeout_ms, port_icmp_t *r)
+{
+    fd_set rd;
+    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+    uint8_t b[256];
+    struct sockaddr_in from;
+    socklen_t fl = sizeof from;
+
+    FD_ZERO(&rd);
+    FD_SET(fd, &rd);
+    int k = select(fd + 1, &rd, NULL, NULL, &tv);
+    if (k <= 0)
+        return k < 0 ? -1 : 0;
+    ssize_t n = recvfrom(fd, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
+    if (n < 20)
+        return 0;
+    int ihl = (b[0] & 0x0F) * 4, il = (int)n - ihl;
+    const uint8_t *ic = b + ihl;
+    if (il < 8)
+        return 0;
+    memset(r, 0, sizeof *r);
+    r->type = ic[0];
+    r->code = ic[1];
+    r->from = from.sin_addr.s_addr;
+    r->ttl = b[8];
+    r->id_known = true;
+    r->len = il;
+    if (r->type == 0) {
+        r->id = (uint16_t)(ic[4] << 8 | ic[5]);
+        r->seq = (uint16_t)(ic[6] << 8 | ic[7]);
+        return 1;
+    }
+    if (r->type != 3 && r->type != 11)
+        return 0;                              /* echo requests (ours to ourselves too) and the rest */
+    const uint8_t *oip = ic + 8;               /* the error quotes our packet: IP header + 8 bytes */
+    if (il < 8 + 20)
+        return 0;
+    int oihl = (oip[0] & 0x0F) * 4;
+    const uint8_t *oic = oip + oihl;
+    if (il < 8 + oihl + 8 || oip[9] != IPPROTO_ICMP || oic[0] != 8)
+        return 0;
+    r->id = (uint16_t)(oic[4] << 8 | oic[5]);
+    r->seq = (uint16_t)(oic[6] << 8 | oic[7]);
+    return 1;
 }
 
 void port_device_id(char out[5])

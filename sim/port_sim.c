@@ -17,7 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <linux/errqueue.h>
 #include <netinet/in.h>
+#include <poll.h>
+#include <sys/uio.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <termios.h>
@@ -95,7 +98,7 @@ int port_console_open(void)
     return m;
 }
 
-void port_console_quiet(bool quiet) { (void)quiet; }
+void port_console_quiet(bool quiet) { (void)quiet; }   /* the log has its own terminal here */
 void port_crypto_init(void) {}      /* software crypto only */
 
 /* The simulated radio's two interfaces (no traffic counters here). */
@@ -128,12 +131,69 @@ int port_netifs(port_netif_t *out, int max)
 }
 
 /* Linux "ping sockets": no privileges needed (net.ipv4.ping_group_range).
- * They go out through the host's network, not the simulated VPN. */
-int port_icmp_socket(bool *with_ip_header)
+ * They go out through the host's network, not the simulated VPN. The kernel
+ * hands each socket only its own echo replies; ICMP errors (time exceeded,
+ * unreachable) arrive on the socket's error queue (IP_RECVERR). */
+int port_icmp_socket(void)
 {
-    *with_ip_header = false;
-    return socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
-}   /* the log has its own terminal here */
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP), on = 1;
+    if (fd >= 0) {
+        setsockopt(fd, IPPROTO_IP, IP_RECVERR, &on, sizeof on);
+        setsockopt(fd, IPPROTO_IP, IP_RECVTTL, &on, sizeof on);
+    }
+    return fd;
+}
+
+int port_icmp_ttl(int fd, int ttl)
+{
+    return setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof ttl);
+}
+
+int port_icmp_recv(int fd, int timeout_ms, port_icmp_t *r)
+{
+    struct pollfd p = { fd, POLLIN, 0 };
+    uint8_t b[256], ctl[512];
+    struct sockaddr_in from;
+    struct iovec iov = { b, sizeof b };
+    struct msghdr m = { .msg_name = &from, .msg_namelen = sizeof from, .msg_iov = &iov, .msg_iovlen = 1,
+                        .msg_control = ctl, .msg_controllen = sizeof ctl };
+
+    int k = poll(&p, 1, timeout_ms);
+    if (k <= 0)
+        return k < 0 ? -1 : 0;
+    memset(r, 0, sizeof *r);
+    r->ttl = -1;
+    if (p.revents & POLLERR) {                 /* an ICMP error about one of our requests */
+        ssize_t n = recvmsg(fd, &m, MSG_ERRQUEUE);
+        if (n < 8)
+            return 0;
+        for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
+            if (c->cmsg_level != IPPROTO_IP || c->cmsg_type != IP_RECVERR)
+                continue;
+            struct sock_extended_err *e = (struct sock_extended_err *)CMSG_DATA(c);
+            if (e->ee_origin != SO_EE_ORIGIN_ICMP)
+                return 0;
+            r->type = e->ee_type;
+            r->code = e->ee_code;
+            r->from = ((struct sockaddr_in *)SO_EE_OFFENDER(e))->sin_addr.s_addr;
+        }
+        r->id = (uint16_t)(b[4] << 8 | b[5]);  /* the error comes with our request as sent */
+        r->seq = (uint16_t)(b[6] << 8 | b[7]);
+        return r->type == 3 || r->type == 11 ? 1 : 0;
+    }
+    ssize_t n = recvmsg(fd, &m, 0);
+    if (n < 8 || b[0] != 0)
+        return 0;
+    r->type = 0;
+    r->from = from.sin_addr.s_addr;
+    r->id = (uint16_t)(b[4] << 8 | b[5]);
+    r->seq = (uint16_t)(b[6] << 8 | b[7]);
+    r->len = (int)n;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c))
+        if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_TTL)
+            memcpy(&r->ttl, CMSG_DATA(c), sizeof r->ttl);
+    return 1;
+}
 
 /* The simulator's threads, from /proc: CPU time is real host CPU time. */
 int port_tasks(port_task_t *out, int max, uint64_t *now_us)

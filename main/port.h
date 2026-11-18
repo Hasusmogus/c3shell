@@ -65,10 +65,18 @@ int      port_vpn_dial(uint32_t ip_be, uint16_t port, int timeout_ms);
 int  port_console_open(void);          /* non-blocking fd for reading and writing, -1 if there is none */
 void port_console_quiet(bool quiet);   /* keep log lines off the console while someone is logged in */
 
-/* ---- ping ---- */
-/* A socket for ICMP echo. *with_ip_header: replies arrive with their IP
- * header in front (a raw socket, as on the chip). -1 if there is none. */
-int  port_icmp_socket(bool *with_ip_header);
+/* ---- ICMP, for ping and traceroute ---- */
+typedef struct {
+    uint8_t  type, code;              /* 0 echo reply, 3 destination unreachable, 11 time exceeded */
+    uint32_t from;                    /* who sent it, network byte order */
+    uint16_t id, seq;                 /* of our echo request: the reply's own, or the one an error quotes */
+    bool     id_known;                /* false: the system already picked out the replies meant for us */
+    int      ttl;                     /* of the arriving packet, -1 if unknown */
+    int      len;                     /* echo reply: its ICMP length */
+} port_icmp_t;
+int  port_icmp_socket(void);                                  /* send echo requests on it; -1 if none */
+int  port_icmp_ttl(int fd, int ttl);                          /* TTL of what is sent next: 0 or -1 */
+int  port_icmp_recv(int fd, int timeout_ms, port_icmp_t *r);  /* 1 = an ICMP message, 0 = none, -1 = error */
 
 /* ---- network interfaces, for 'ip' ---- */
 typedef struct {

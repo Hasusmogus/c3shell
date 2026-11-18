@@ -596,6 +596,19 @@ def t_ping(c):
     t.line("ping -x")
     t.expect("usage: ping")
     t.expect(PROMPT)
+    t.line("traceroute 127.0.0.1; echo rc=$?")
+    out = t.expect(PROMPT)
+    assert "traceroute to 127.0.0.1 (127.0.0.1), 30 hops max" in out, out
+    assert re.search(r"\r\n 1  127\.0\.0\.1  [\d.]+ ms  [\d.]+ ms  [\d.]+ ms\r\nrc=0", out), out
+    t.line("tracert -q 1 localhost")                   # the Windows name works too
+    out = t.expect(PROMPT)
+    assert re.search(r" 1  127\.0\.0\.1  [\d.]+ ms\r\n", out), out
+    t.line("tracert no-such-host.invalid; echo rc=$?")
+    out = t.expect(PROMPT)
+    assert "could not resolve hostname" in out and "rc=2" in out, out
+    t.line("traceroute -m 99 x")
+    t.expect("usage: traceroute")
+    t.expect(PROMPT)
 
 
 @step("wifi selector: scan, wrong password, cancel")
