@@ -30,7 +30,7 @@ WC  := aes asn coding curve25519 ed25519 ecc error fe_operations ge_operations h
        wc_encrypt wolfmath
 TLS := internal keys ssl tls tls13 wolfio
 SSH := internal io log port ssh keygen ossh misc
-APP := term sshio fs vi top console ping script account netmgr server shell sshstore sshc xfer ovpn vpnif
+APP := term sshio fs vi top console ping script ipcmd account netmgr server shell sshstore sshc xfer ovpn vpnif
 # lwIP: the VPN tunnel's TCP/IP stack in the simulator (the chip has its own)
 LWIP_SRC := $(wildcard $(LWIP)/src/core/*.c $(LWIP)/src/core/ipv4/*.c $(LWIP)/src/api/*.c) \
             $(LWIP)/contrib/ports/unix/port/sys_arch.c

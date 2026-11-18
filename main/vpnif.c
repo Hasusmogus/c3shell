@@ -151,6 +151,14 @@ int vpnif_up(const vpnif_cfg_t *c, void (*out)(const uint8_t *pkt, size_t len))
     return tcpip_api_call(do_call, &k.base) == ERR_OK ? 0 : -1;
 }
 
+bool vpnif_config(vpnif_cfg_t *out)
+{
+    if (!added)
+        return false;
+    *out = cfg;                       /* set once per connection, in the TCP/IP thread */
+    return true;
+}
+
 void vpnif_down(void)
 {
     struct call k = { .up = 0 };

@@ -24,6 +24,9 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/gpio.h"
+#include "lwip/pbuf.h"
+#include "esp_netif_net_stack.h"
 #include "aes/esp_aes.h"
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/aes.h>
@@ -355,6 +358,7 @@ int port_thread_start(const char *name, size_t stack, void (*fn)(void *), void *
 #define BIT_FAILED BIT1
 
 static esp_netif_t *sta_if, *ap_if;
+static void led_start(void);          /* the activity LED, below */
 static EventGroupHandle_t wifi_ev;
 static volatile bool sta_want;      /* we want to be associated */
 static volatile bool sta_joining;   /* inside port_wifi_sta_connect() */
@@ -391,6 +395,7 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     sta_if = esp_netif_create_default_wifi_sta();
     ap_if = esp_netif_create_default_wifi_ap();
+    led_start();
     port_device_id(id);
     snprintf(host, sizeof host, "%s-%s", C3_NAME, id);
     esp_netif_set_hostname(sta_if, host);
@@ -556,6 +561,112 @@ void app_main(void)
     wifi_init();
     c3shell_main();
 }
+
+/* ---------------- traffic: counters for 'ip -s link', and the LED ---------------- */
+
+/* Every WiFi frame in passes ethernet_input and every IPv4 packet out passes
+ * etharp_output (wlanif.c points the netifs there). The link options
+ * --wrap=ethernet_input --wrap=etharp_output (main/CMakeLists.txt) put these
+ * counters in front: a few increments per packet, nothing more. */
+static struct netif *sta_nif, *ap_nif;
+static volatile uint32_t pk_rx[2], pk_tx[2], traffic;
+static volatile uint64_t by_rx[2], by_tx[2];
+
+static int nif_index(struct netif *n)
+{
+    if (!sta_nif && sta_if)
+        sta_nif = esp_netif_get_netif_impl(sta_if);
+    if (!ap_nif && ap_if)
+        ap_nif = esp_netif_get_netif_impl(ap_if);
+    return n == sta_nif ? 0 : n == ap_nif ? 1 : -1;
+}
+
+err_t __real_ethernet_input(struct pbuf *p, struct netif *netif);
+err_t __wrap_ethernet_input(struct pbuf *p, struct netif *netif)
+{
+    int i = nif_index(netif);
+    if (i >= 0) {
+        pk_rx[i]++;
+        by_rx[i] += p->tot_len;
+    }
+    traffic++;
+    return __real_ethernet_input(p, netif);
+}
+
+err_t __real_etharp_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ipaddr);
+err_t __wrap_etharp_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ipaddr)
+{
+    int i = nif_index(netif);
+    if (i >= 0) {
+        pk_tx[i]++;
+        by_tx[i] += q->tot_len;
+    }
+    traffic++;
+    return __real_etharp_output(netif, q, ipaddr);
+}
+
+int port_netifs(port_netif_t *out, int max)
+{
+    esp_netif_t *nifs[2] = { sta_if, ap_if };
+    static const char *const names[2] = { "wlan0", "ap0" };
+    int n = 0;
+    for (int i = 0; i < 2 && n < max; i++) {
+        esp_netif_ip_info_t info;
+        port_netif_t *o = &out[n];
+        if (!nifs[i])
+            continue;
+        memset(o, 0, sizeof *o);
+        snprintf(o->name, sizeof o->name, "%s", names[i]);
+        o->up = esp_netif_is_netif_up(nifs[i]);
+        esp_netif_get_mac(nifs[i], o->mac);
+        if (esp_netif_get_ip_info(nifs[i], &info) == ESP_OK) {
+            o->ip = info.ip.addr;
+            o->mask = info.netmask.addr;
+            o->gw = info.gw.addr;
+        }
+        o->rx_pkts = pk_rx[i];
+        o->tx_pkts = pk_tx[i];
+        o->rx_bytes = by_rx[i];
+        o->tx_bytes = by_tx[i];
+        n++;
+    }
+    return n;
+}
+
+#if C3_LED_GPIO >= 0
+#define LED_ON  (C3_LED_ACTIVE_LOW ? 0 : 1)
+#define LED_OFF (C3_LED_ACTIVE_LOW ? 1 : 0)
+
+/* Every 40 ms: a flash if any frame went in or out since the last look, so
+ * steady traffic flickers (~12 Hz) and a single packet is one short blink. */
+static void led_tick(void *arg)
+{
+    static uint32_t seen;
+    static bool lit;
+    (void)arg;
+    if (lit) {
+        gpio_set_level(C3_LED_GPIO, LED_OFF);
+        lit = false;
+    } else if (traffic != seen) {
+        seen = traffic;
+        gpio_set_level(C3_LED_GPIO, LED_ON);
+        lit = true;
+    }
+}
+
+static void led_start(void)
+{
+    esp_timer_handle_t t;
+    const esp_timer_create_args_t args = { .callback = led_tick, .name = "led" };
+    gpio_reset_pin(C3_LED_GPIO);
+    gpio_set_direction(C3_LED_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(C3_LED_GPIO, LED_OFF);
+    if (esp_timer_create(&args, &t) == ESP_OK)
+        esp_timer_start_periodic(t, 40 * 1000);
+}
+#else
+static void led_start(void) {}
+#endif
 
 /* ---------------- VPN tunnel routing ---------------- */
 

@@ -70,6 +70,17 @@ void port_console_quiet(bool quiet);   /* keep log lines off the console while s
  * header in front (a raw socket, as on the chip). -1 if there is none. */
 int  port_icmp_socket(bool *with_ip_header);
 
+/* ---- network interfaces, for 'ip' ---- */
+typedef struct {
+    char     name[8];                 /* "wlan0" (the joined network), "ap0" (the setup network) */
+    bool     up;
+    uint8_t  mac[6];
+    uint32_t ip, mask, gw;            /* network byte order; 0 = none */
+    uint32_t rx_pkts, tx_pkts;        /* frames since boot (0 = not counted) */
+    uint64_t rx_bytes, tx_bytes;
+} port_netif_t;
+int  port_netifs(port_netif_t *out, int max);   /* how many were filled in */
+
 /* ---- WiFi ---- */
 typedef struct {
     char    ssid[33];

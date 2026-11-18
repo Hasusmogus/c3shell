@@ -27,6 +27,9 @@
 
 #define C3_KNOWN_HOSTS     16
 
+#define C3_LED_GPIO        8          /* built-in LED, flashes with network traffic; -1 = none */
+#define C3_LED_ACTIVE_LOW  1          /* lit when the pin is low (ESP32-C3 SuperMini) */
+
 #define C3_PATH_MAX        128        /* longest path in the file area, e.g. "/notes/todo.txt" */
 #define C3_NAME_MAX        64         /* longest single name + 1 (LittleFS limit) */
 #define C3_HOST_MAX        (C3_PATH_MAX + 64) /* the same path with the file area's mount point in front */

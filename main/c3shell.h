@@ -105,6 +105,7 @@ typedef struct {
 int  server_sessions(sess_info_t *out, int max);   /* snapshot of the session table */
 int  cmd_top(session_t *s, int argc, char **argv); /* top.c */
 int  cmd_ping(session_t *s, int argc, char **argv); /* ping.c */
+int  cmd_ip(session_t *s, int argc, char **argv);   /* ipcmd.c */
 void server_console_attach(session_t *s);          /* show a console session in 'top' (NULL = none) */
 
 /* ---------- local console (console.c) ---------- */
@@ -216,6 +217,7 @@ typedef struct {
 } vpnif_cfg_t;
 
 int  vpnif_up(const vpnif_cfg_t *c, void (*out)(const uint8_t *pkt, size_t len));
+bool vpnif_config(vpnif_cfg_t *out);  /* the tunnel's addresses and routes, if it is up */
 void vpnif_down(void);
 void vpnif_input(const uint8_t *pkt, size_t len);
 bool vpn_routes_ip(uint32_t ip_be);

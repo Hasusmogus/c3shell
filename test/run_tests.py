@@ -301,6 +301,19 @@ def t_shell(c):
     t.line("free -x")
     t.expect("usage: free")
     t.expect(PROMPT)
+    t.line("ip a")
+    out = t.expect(PROMPT)
+    assert re.search(r"1: wlan0: <BROADCAST,MULTICAST> mtu 1500 state DOWN", out), out
+    assert "2: ap0: <BROADCAST,MULTICAST,UP,LOWER_UP>" in out and "inet 192.168.4.1/24 brd 192.168.4.255" in out, out
+    t.line("ip r")
+    out = t.expect(PROMPT)
+    assert "192.168.4.0/24 dev ap0 scope link src 192.168.4.1" in out and "default" not in out, out
+    t.line("ip -s link")
+    out = t.expect(PROMPT)
+    assert "link/ether 02:00:00:51:4d:31" in out and "inet" not in out, out
+    t.line("ip neigh")
+    t.expect("usage: ip")
+    t.expect(PROMPT)
     t.line("uname")
     t.expect("\r\nc3shell\r\n")
     t.expect(PROMPT)
@@ -629,6 +642,13 @@ def t_wifi_join(c):
     t.line("status")
     out = t.expect(PROMPT)
     assert "joined 'HomeNet'" in out and "Setup network: off" in out, out
+    t.line("ip route")
+    out = t.expect(PROMPT)
+    assert "default via 192.168.0.1 dev wlan0" in out and "192.168.0.0/24 dev wlan0 scope link src 192.168.0.77" in out, out
+    assert "ap0" not in out, out
+    t.line("ip addr")
+    out = t.expect(PROMPT)
+    assert "wifi 'HomeNet' signal" in out and "inet 192.168.0.77/24" in out and "state DOWN" in out, out
     c["t"] = t
 
 

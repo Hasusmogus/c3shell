@@ -20,6 +20,7 @@ Run with:  make test-vpn   (also part of make test)
 """
 import getpass
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -173,7 +174,18 @@ def main_inside():
         t.line("status")
         out = t.expect(R.PROMPT)
         assert "VPN:           connected, address 10.8.0.2" in out, out
+        t.line("ip -s addr")
+        out = t.expect(R.PROMPT)
+        assert "tun0: <POINTOPOINT,UP,LOWER_UP> mtu 1400" in out and "inet 10.8.0.2/24 scope global tun0" in out, out
+        assert "openvpn to 127.0.0.1:1194/udp" in out and re.search(r"RX: bytes [1-9]", out), out
+        t.line("ip route")
+        out = t.expect(R.PROMPT)
+        assert "10.8.0.0/24 dev tun0 scope link src 10.8.0.2" in out, out
+        assert re.search(r"\d+\.\d+\.\d+\.\d+/\d+ dev tun0\r\n", out), out     # the route the server pushed
         vpn_down()
+        t.line("ip addr")
+        out = t.expect(R.PROMPT)
+        assert "tun0" not in out, out
         t.line("vpn")
         out = t.expect(R.PROMPT)
         assert "VPN: off" in out, out
@@ -186,6 +198,12 @@ def main_inside():
         put("tcp.ovpn", ovpn(d, "tcp", f"key-direction 1\n<tls-auth>\n{open(d + '/ta.key').read()}</tls-auth>\n"))
         vpn_up("tcp.ovpn")
         roundtrip("tcp")
+        t.line("ip a")
+        out = t.expect(R.PROMPT)
+        assert re.search(r"inet 10\.8\.0\.6 peer 10\.8\.0\.5 scope global tun0", out), out   # net30
+        t.line("ip r")
+        out = t.expect(R.PROMPT)
+        assert "10.8.0.5 dev tun0 scope link src 10.8.0.6" in out, out
         assert any("AES-128-GCM" in l and "tunnel address 10.8.0.6" in l for l in sim.log), sim.log[-5:]
         vpn_down()
         srv.stop()
@@ -259,7 +277,6 @@ def main_inside():
                           "\n        ".join(open(srv.log).read().splitlines()[-25:]))
                 break
     finally:
-        import re
         room = [int(m.group(1)) for l in sim.log for m in [re.search(r"vpn: stopped \(stack headroom was (\d+)", l)] if m]
         if room:
             print(f"\n  smallest VPN thread stack headroom seen: {min(room)} bytes (x86-64 build)")

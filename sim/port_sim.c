@@ -98,6 +98,35 @@ int port_console_open(void)
 void port_console_quiet(bool quiet) { (void)quiet; }
 void port_crypto_init(void) {}      /* software crypto only */
 
+/* The simulated radio's two interfaces (no traffic counters here). */
+int port_netifs(port_netif_t *out, int max)
+{
+    static const uint8_t mac[6] = { 0x02, 0x00, 0x00, 0x51, 0x4d, 0x30 };
+    int n = 0;
+    for (int i = 0; i < 2 && n < max; i++, n++) {
+        port_netif_t *o = &out[n];
+        memset(o, 0, sizeof *o);
+        memcpy(o->mac, mac, 6);
+        o->mac[5] += (uint8_t)i;
+        o->mask = htonl(0xFFFFFF00u);
+        if (i == 0) {
+            snprintf(o->name, sizeof o->name, "wlan0");
+            o->up = sta_up;
+            if (sta_up) {
+                o->ip = htonl(0xC0A8004Du);     /* 192.168.0.77, as port_wifi_sta_ip says */
+                o->gw = htonl(0xC0A80001u);
+            } else {
+                o->mask = 0;
+            }
+        } else {
+            snprintf(o->name, sizeof o->name, "ap0");
+            o->up = ap_up;
+            o->ip = htonl(0xC0A80401u);         /* 192.168.4.1 */
+        }
+    }
+    return n;
+}
+
 /* Linux "ping sockets": no privileges needed (net.ipv4.ping_group_range).
  * They go out through the host's network, not the simulated VPN. */
 int port_icmp_socket(bool *with_ip_header)

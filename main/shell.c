@@ -89,6 +89,7 @@ static int cmd_help(session_t *s, int argc, char **argv)
             "  wifi forget               forget the saved network, host the setup network\n"
             "  ssh [user@]host [-p port] open a shell on another machine\n"
             "  ping [-c n] [-i s] [-W s] host   check that a machine answers (Ctrl-C stops)\n"
+            "  ip [-s] addr|route|link   interfaces, addresses, routes (-s: traffic counters)\n"
             "                            (hang up a stuck one with ~. on a new line; ~~. from OpenSSH)\n"
             "  scp [-r] [-P port] from... to   copy files to/from another machine,\n"
             "                            e.g. scp notes.txt me@pc:  or  scp me@pc:work.ovpn .\n"
@@ -738,6 +739,7 @@ static const struct {
     { "status", cmd_status }, { "fetch", cmd_fetch },    { "neofetch", cmd_fetch },
     { "free", cmd_free },     { "uname", cmd_uname },    { "uptime", cmd_uptime },
     { "top", cmd_top },       { "htop", cmd_top },       { "ping", cmd_ping },
+    { "ip", cmd_ip },
     { "passwd", cmd_passwd },  { "reboot", cmd_reboot },
     { "factory-reset", cmd_factory_reset },
     { "ls", cmd_ls },         { "cd", cmd_cd },          { "pwd", cmd_pwd },
@@ -817,7 +819,7 @@ void shell_complete(session_t *s, const char *line, const char *word, tn_cands_t
         { "hosts", "forget", false },    { "sshkey", "new", false },
         { "fetch", "--plain", false },   { "neofetch", "--plain", false },
         { "free", "-b -k -h", false },   { "uname", "-a -s -n -r -v -m -o", false },
-        { "uptime", "-p", false },
+        { "uptime", "-p", false },       { "ip", "addr route link -s", false },
         { "top", "-d", false },          { "htop", "-d", false },
         { "ls", "-l -a", true },         { "rm", "-r -f", true },
         { "mkdir", "-p", true },         { "scp", "-r -P", true },
